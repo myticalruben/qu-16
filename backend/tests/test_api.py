@@ -27,6 +27,8 @@ def test_mixer_status_returns_initial_state() -> None:
         "connected": False,
         "model": None,
         "firmware": None,
+        "updated_at": None,
+        "channels": [],
     }
 
 

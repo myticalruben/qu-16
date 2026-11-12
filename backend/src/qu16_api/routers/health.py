@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from .. import __version__
-from ..state import mixer_state
+from ..state import state_mirror
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -17,6 +17,16 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/mixer/status")
-async def mixer_status() -> dict[str, bool | str | None]:
-    """Estado en memoria del vínculo con la mesa (sin conectar todavía)."""
-    return mixer_state.snapshot()
+async def mixer_status() -> dict[str, object]:
+    """Instantánea completa del vínculo con la mesa."""
+    return await state_mirror.snapshot()
+
+
+@router.get("/mixer/channels")
+async def mixer_channels() -> dict[str, object]:
+    """Canales del último volcado y momento en que se recibió."""
+    snapshot = await state_mirror.snapshot()
+    return {
+        "channels": snapshot["channels"],
+        "updated_at": snapshot["updated_at"],
+    }

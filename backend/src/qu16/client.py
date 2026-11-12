@@ -101,6 +101,20 @@ class QuClient:
         except Exception:
             pass
 
+    @property
+    def connected(self) -> bool:
+        """``True`` mientras el flujo TCP siga abierto.
+
+        El lector en segundo plano termina cuando el otro extremo cierra la
+        conexión; ``_closed`` solo refleja un cierre pedido desde este lado.
+        """
+        return (
+            not self._closed
+            and self._writer is not None
+            and self._reader_task is not None
+            and not self._reader_task.done()
+        )
+
     async def send(self, packet: SystemPacket | DspCommand) -> None:
         if self._writer is None:
             raise QuError("cliente no conectado")

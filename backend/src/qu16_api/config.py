@@ -6,7 +6,7 @@ import json
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 #: Orígenes permitidos por defecto: Vite en desarrollo y nginx en despliegue.
@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     app_name: str = "Qu-16 Control API"
     mixer_host: str = "192.168.100.67"
     mixer_port: int = Field(default=51326, ge=1, le=65535)
+    #: Si es ``False`` (por defecto) la API no abre ningún socket: los tests y
+    #: el CI no dependen de que haya una mesa en la red.
+    auto_connect: bool = False
+    #: Rango del retroceso exponencial entre reintentos de conexión.
+    reconnect_min: float = Field(default=1.0, gt=0)
+    reconnect_max: float = Field(default=30.0, gt=0)
+    #: Periodo del latido de control mientras la sesión está viva.
+    keepalive_interval: float = Field(default=0.5, gt=0)
     #: ``NoDecode`` evita que pydantic-settings intente decodificar la lista
     #: como JSON antes de que se ejecute el validador de abajo.
     cors_origins: Annotated[list[str], NoDecode] = Field(
@@ -58,6 +66,13 @@ class Settings(BaseSettings):
                 raise ValueError("cors_origins debe ser una lista JSON")
             return parsed
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def _check_reconnect_range(self) -> "Settings":
+        """Impide un rango de reconexión incoherente."""
+        if self.reconnect_max < self.reconnect_min:
+            raise ValueError("reconnect_max no puede ser menor que reconnect_min")
+        return self
 
 
 @lru_cache

@@ -1,8 +1,8 @@
 """Aplicación FastAPI de qu16-control.
 
-En la Fase 1 solo se sirve la API y el WebSocket de eventos. La conexión real
-con la mesa llegará en la Fase 2; por eso el ``lifespan`` todavía no abre
-ningún socket TCP.
+La API sirve el estado del espejo en memoria y lo empuja por WebSocket. La
+conexión con la mesa solo se abre si ``QU16_AUTO_CONNECT`` está activo; con el
+valor por defecto (``false``) el proceso no abre ningún socket.
 """
 
 from __future__ import annotations
@@ -16,13 +16,18 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from qu16.link import MixerLink
 
 from . import __version__
 from .config import get_settings
 from .routers import health
-from .state import mixer_state
+from .state import state_mirror
+from .ws import StateHub
 
 logger = logging.getLogger(__name__)
+
+#: Reparte a los websockets cada instantánea que publica el enlace.
+state_hub = StateHub(state_mirror)
 
 
 def frontend_dist() -> Path | None:
@@ -57,35 +62,68 @@ def frontend_dist() -> Path | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Ciclo de vida de la aplicación; sin conexión con la mesa en Fase 1."""
+    """Arranca y detiene el enlace con la mesa según ``auto_connect``."""
+    settings = get_settings()
     logger.info("Arrancando %s %s", app.title, __version__)
+
+    link: MixerLink | None = None
+    if settings.auto_connect:
+        link = MixerLink(
+            settings.mixer_host,
+            settings.mixer_port,
+            mirror=state_mirror,
+            on_state=state_hub.on_state,
+            reconnect_min=settings.reconnect_min,
+            reconnect_max=settings.reconnect_max,
+            keepalive_interval=settings.keepalive_interval,
+        )
+        link.start()
+        logger.info(
+            "Enlace con la mesa activado (%s:%d)",
+            settings.mixer_host,
+            settings.mixer_port,
+        )
+    else:
+        logger.info(
+            "Enlace con la mesa desactivado (QU16_AUTO_CONNECT=false)"
+        )
+
+    app.state.mixer_link = link
     try:
         yield
     finally:
-        mixer_state.mark_disconnected()
+        if link is not None:
+            await link.stop()
+        await state_mirror.mark_disconnected()
         logger.info("API detenida")
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """Canal de eventos en tiempo real.
 
-    Al conectar envía el saludo con la versión y después descarta cualquier
-    mensaje del cliente. En fases posteriores este canal empujará el estado
-    de la mesa.
+    Al conectar envía el saludo con la versión y la instantánea actual, y a
+    partir de ahí el :class:`StateHub` le empuja cada cambio de estado. Los
+    mensajes entrantes se descartan a propósito (Fase 2 es de solo lectura).
     """
     await websocket.accept()
     await websocket.send_json(
         {"type": "hello", "payload": {"version": __version__}}
     )
+    await state_hub.register(websocket)
 
     try:
+        await websocket.send_json(
+            {"type": "state", "payload": await state_mirror.snapshot()}
+        )
         while True:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
-            # Fase 1: los mensajes entrantes se descartan a propósito.
+            # Fase 2: los mensajes entrantes se descartan a propósito.
     except WebSocketDisconnect:
         logger.debug("Cliente WebSocket desconectado")
+    finally:
+        await state_hub.unregister(websocket)
 
 
 def create_app() -> FastAPI:
