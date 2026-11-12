@@ -32,7 +32,7 @@ install: ## Crea el venv del backend e instala dependencias de ambos lados
 	@echo "==> Backend: venv + instalación editable con extras de desarrollo"
 	cd $(BACKEND_DIR) && python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e ".[dev]"
 	@echo "==> Frontend: dependencias npm"
-	cd $(FRONTEND_DIR) && if [ -f package-lock.json ]; then npm ci; else npm install; fi
+	cd $(FRONTEND_DIR) && if [ -f package-lock.json ]; then npm ci --include=dev; else npm install --include=dev; fi
 
 test: ## Ejecuta pytest (backend) y vitest (frontend)
 	@echo "==> pytest"

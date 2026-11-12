@@ -1,0 +1,13 @@
+# Contexto de build del frontend. `dist/` se excluye porque la imagen debe
+# compilar el frontend dentro del Dockerfile (build multi-stage); no se copia
+# un dist generado en local.
+node_modules/
+dist/
+.vite/
+coverage/
+__pycache__/
+*.tsbuildinfo
+.git/
+.gitignore
+.env
+.env.local
