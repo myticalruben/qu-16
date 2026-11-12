@@ -1,7 +1,28 @@
+# Python
 .venv/
+venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
-*.egg-info/
-docs/*.bin
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Entorno
+.env
+.env.local
+
+# Volcados capturados de la mesa (los fixtures de test sí se versionan)
+**/docs/*.bin
+!**/tests/data/*.bin
+
+# Editores
+.vscode/
+.idea/
+.DS_Store

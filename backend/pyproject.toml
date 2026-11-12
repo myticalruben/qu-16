@@ -9,10 +9,18 @@ description = "Control web para Allen & Heath Qu-16 sobre el protocolo CMNet"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.9",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic-settings>=2.6",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

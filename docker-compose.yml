@@ -1,0 +1,79 @@
+# Orquestación de qu16-control para la laptop Linux que está en la misma red
+# que la mesa Allen & Heath Qu-16.
+#
+# Uso rápido:
+#   docker network create qu16-lan        # solo la primera vez
+#   docker compose up -d --build
+#
+# Variables de entorno (opcionales, se pueden definir en un .env):
+#   QU16_MIXER_HOST  IP de la mesa (por defecto 192.168.100.67)
+#   QU16_MIXER_PORT  puerto CMNet de la mesa (por defecto 51326)
+#
+# Nota: la clave `version:` es obsoleta en Compose v2 y se omite a propósito.
+
+name: qu16-control
+
+services:
+  # API FastAPI (uvicorn en el puerto 8000).
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: qu16-control-backend:latest
+    ports:
+      - "8000:8000"
+    environment:
+      QU16_MIXER_HOST: ${QU16_MIXER_HOST:-192.168.100.67}
+      QU16_MIXER_PORT: ${QU16_MIXER_PORT:-51326}
+    restart: unless-stopped
+    healthcheck:
+      # Se usa python (presente en la imagen del backend) para no depender de
+      # curl/wget dentro del contenedor. urllib lanza excepción si el estado
+      # no es 2xx, por lo que un /api/health caído devuelve código != 0.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - qu16-net
+      - qu16-lan
+
+    # Alternativa si se prefiere usar la red del host en vez de `qu16-lan`
+    # (Linux únicamente). Para ello:
+    #   1. comenta el bloque `ports:` y el bloque `networks:` de este servicio,
+    #   2. descomenta la línea siguiente.
+    # Con network_mode: host el backend escucha en el 8000 del host y llega a
+    # la mesa sin necesidad de la red externa qu16-lan.
+    # network_mode: host
+
+  # Frontend estático servido por nginx (puerto 80 del contenedor -> 8080 host).
+  # nginx.conf interno hace proxy de /api y /ws hacia backend:8000.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: qu16-control-frontend:latest
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - qu16-net
+
+networks:
+  # Red interna entre frontend y backend; no necesita configuración previa.
+  qu16-net:
+    driver: bridge
+
+  # Red externa que conecta el backend con la LAN real de la mesa.
+  # Hay que crearla una vez en el host:
+  #   docker network create qu16-lan
+  qu16-lan:
+    external: true

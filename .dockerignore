@@ -1,0 +1,32 @@
+# Contexto raíz de Docker (por si se construye desde la raíz del repo).
+# Los builds reales usan ./backend y ./frontend como contexto.
+.git
+.github
+.gitignore
+
+# Python
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Node
+**/node_modules
+**/dist
+**/.vite
+**/*.tsbuildinfo
+
+# Entorno y datos locales
+.env
+.env.local
+docs/*.bin
+tests/data/*.bin
+
+# Editores y sistema
+.vscode
+.idea
+.DS_Store
