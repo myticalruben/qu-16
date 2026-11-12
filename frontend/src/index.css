@@ -199,6 +199,19 @@
     pointer-events: none;
   }
 
+  /*
+   * Pulso de maqueta de la Fase 2. La duración y el desfase llegan en línea
+   * desde MeterBar para que cada canal lata a un ritmo distinto. En la Fase 3
+   * el relleno pasará a ser el nivel real y esta clase desaparecerá.
+   */
+  .meter-bar__fill--demo {
+    transform-origin: bottom;
+    animation-name: meter-demo;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    animation-direction: alternate;
+  }
+
   /* ---------- Fader vertical hecho a mano ---------- */
   .fader-range {
     appearance: none;
@@ -341,6 +354,16 @@
   50% {
     opacity: 0.9;
     transform: scale(1.12);
+  }
+}
+
+@keyframes meter-demo {
+  from {
+    transform: scaleY(0.72);
+  }
+
+  to {
+    transform: scaleY(1.06);
   }
 }
 

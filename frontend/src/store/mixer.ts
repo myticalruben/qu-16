@@ -3,100 +3,128 @@ import { create } from 'zustand'
 /** Los tres estados visibles del enlace con el backend. */
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected'
 
-/** Acento visual del canal; la consola usa ámbar y cian. */
-export type ChannelAccent = 'amber' | 'cyan'
+/** Naturaleza del canal tal y como la reporta el backend. */
+export type ChannelKind = 'input' | 'stereo' | 'other'
 
-export interface MixerChannel {
-  /** Índice de canal que usa el protocolo (1–16 en la Qu-16). */
-  id: number
+/** Canal ya normalizado para la UI (camelCase y nombres no vacíos limpios). */
+export interface Channel {
+  /** Índice de canal que usa el protocolo de la Qu-16. */
+  index: number
   name: string
-  /** Posición del fader en dB. El mínimo de la maqueta es -60 dB. */
-  faderDb: number
-  /** Nivel instantáneo del medidor, normalizado de 0 a 1. */
-  meter: number
-  muted: boolean
-  accent: ChannelAccent
+  /** Nivel del fader en dB; `null` equivale a −∞. */
+  levelDb: number | null
+  kind: ChannelKind
+}
+
+/** Volcado completo de la mesa, tal y como lo consume la interfaz. */
+export interface MixerSnapshot {
+  /** `true` solo si el backend tiene enlace con la mesa física. */
+  connected: boolean
+  model: string | null
+  firmware: string | null
+  /** Marca temporal ISO del último volcado. */
+  updatedAt: string | null
+  channels: Channel[]
+}
+
+/** Canal tal y como viaja por el WebSocket (snake_case). */
+export interface ChannelPayload {
+  index: number
+  name: string
+  level_db: number | null
+  kind: ChannelKind
+}
+
+/** Mensaje `state` del backend sin normalizar. */
+export interface MixerStatePayload {
+  connected: boolean
+  model: string | null
+  firmware: string | null
+  updated_at: string | null
+  channels: ChannelPayload[]
 }
 
 export const FADER_MIN_DB = -60
 export const FADER_MAX_DB = 10
 
-/**
- * Canales de ejemplo mientras el backend no entrega el volcado real.
- * Los nombres imitan los que ya usaba la mesa en la Fase 0.
- */
-export const demoChannels: MixerChannel[] = [
-  { id: 1, name: 'coro1', faderDb: -3.5, meter: 0.64, muted: false, accent: 'cyan' },
-  { id: 2, name: 'piano', faderDb: -7, meter: 0.52, muted: false, accent: 'amber' },
-  { id: 3, name: 'guitar', faderDb: -1.5, meter: 0.71, muted: false, accent: 'cyan' },
-  { id: 4, name: 'voz 1', faderDb: 1.5, meter: 0.82, muted: false, accent: 'amber' },
-  { id: 5, name: 'voz 2', faderDb: -5, meter: 0.58, muted: false, accent: 'cyan' },
-  { id: 6, name: 'bajo', faderDb: -9, meter: 0.45, muted: false, accent: 'amber' },
-  { id: 7, name: 'batería', faderDb: -2, meter: 0.76, muted: false, accent: 'cyan' },
-  { id: 8, name: 'FX 1', faderDb: -14, meter: 0.28, muted: true, accent: 'amber' },
-]
+const EMPTY_SNAPSHOT: MixerSnapshot = {
+  connected: false,
+  model: null,
+  firmware: null,
+  updatedAt: null,
+  channels: [],
+}
 
-interface MixerStore {
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+/** Descarta cadenas vacías o de solo espacios; el resto se recorta. */
+const normalizeText = (value: unknown): string =>
+  typeof value === 'string' ? value.trim() : ''
+
+const normalizeKind = (value: unknown): ChannelKind =>
+  value === 'input' || value === 'stereo' ? value : 'other'
+
+/** Normaliza un canal del protocolo y tolera campos ausentes o corruptos. */
+function normalizeChannel(payload: ChannelPayload): Channel {
+  return {
+    index: isFiniteNumber(payload?.index) ? payload.index : 0,
+    name: normalizeText(payload?.name),
+    levelDb: isFiniteNumber(payload?.level_db) ? payload.level_db : null,
+    kind: normalizeKind(payload?.kind),
+  }
+}
+
+interface MixerState extends MixerSnapshot {
+  /** Estado del socket con el backend, que no es lo mismo que la mesa. */
   connectionState: ConnectionState
+  /** `true` mientras el usuario mantiene el enlace abierto (aunque reintente). */
+  linkActive: boolean
   serverVersion: string | null
-  channels: MixerChannel[]
   setConnectionState: (state: ConnectionState) => void
+  setLinkActive: (active: boolean) => void
   setServerVersion: (version: string | null) => void
-  setChannels: (channels: MixerChannel[]) => void
-  setChannelFader: (id: number, faderDb: number) => void
-  setChannelMeter: (id: number, meter: number) => void
-  toggleChannelMute: (id: number) => void
+  /** Aplica un mensaje `state`: normaliza snake_case, ordena y guarda. */
+  applyState: (payload: MixerStatePayload) => void
   reset: () => void
 }
 
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value))
-
-const freshDemoChannels = () => demoChannels.map((channel) => ({ ...channel }))
-
-export const useMixerStore = create<MixerStore>()((set) => ({
+export const useMixerStore = create<MixerState>()((set) => ({
+  ...EMPTY_SNAPSHOT,
   connectionState: 'disconnected',
+  linkActive: false,
   serverVersion: null,
-  channels: freshDemoChannels(),
 
   setConnectionState: (connectionState) => set({ connectionState }),
 
+  setLinkActive: (linkActive) => set({ linkActive }),
+
   setServerVersion: (serverVersion) => set({ serverVersion }),
 
-  setChannels: (channels) => set({ channels: channels.map((channel) => ({ ...channel })) }),
-
-  setChannelFader: (id, faderDb) =>
-    set((state) => ({
-      channels: state.channels.map((channel) =>
-        channel.id === id
-          ? {
-              ...channel,
-              faderDb: clamp(faderDb, FADER_MIN_DB, FADER_MAX_DB),
-            }
-          : channel,
-      ),
-    })),
-
-  setChannelMeter: (id, meter) =>
-    set((state) => ({
-      channels: state.channels.map((channel) =>
-        channel.id === id
-          ? { ...channel, meter: clamp(meter, 0, 1) }
-          : channel,
-      ),
-    })),
-
-  toggleChannelMute: (id) =>
-    set((state) => ({
-      channels: state.channels.map((channel) =>
-        channel.id === id ? { ...channel, muted: !channel.muted } : channel,
-      ),
-    })),
+  applyState: (payload) =>
+    set({
+      connected: payload?.connected === true,
+      model: normalizeText(payload?.model) || null,
+      firmware: normalizeText(payload?.firmware) || null,
+      updatedAt: normalizeText(payload?.updated_at) || null,
+      channels: (Array.isArray(payload?.channels) ? payload.channels : [])
+        .map(normalizeChannel)
+        .sort((a, b) => a.index - b.index),
+    }),
 
   reset: () =>
     set({
+      ...EMPTY_SNAPSHOT,
+      channels: [],
       connectionState: 'disconnected',
+      linkActive: false,
       serverVersion: null,
-      channels: freshDemoChannels(),
     }),
 }))
+
+/** Número total de canales recibidos. */
+export const channelCount = (state: MixerState): number => state.channels.length
+
+/** Canales con nombre visible; el rack los muestra por defecto. */
+export const namedChannels = (state: MixerState): Channel[] =>
+  state.channels.filter((channel) => channel.name.trim() !== '')

@@ -1,9 +1,16 @@
 import { ChannelRack } from './components/ChannelRack'
 import { ConnectionBadge } from './components/ConnectionBadge'
 import { connectMixerSocket, disconnectMixerSocket } from './lib/ws'
-import { useMixerStore } from './store/mixer'
+import { channelCount, namedChannels, useMixerStore } from './store/mixer'
 
 const APP_VERSION = __APP_VERSION__
+
+/** Hora local del último volcado; si la marca es inválida, se muestra tal cual. */
+function formatUpdatedAt(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleTimeString('es-ES', { hour12: false })
+}
 
 function BrandMark() {
   return (
@@ -74,14 +81,25 @@ function LinkIcon({ engaged }: { engaged: boolean }) {
 function App() {
   const connectionState = useMixerStore((state) => state.connectionState)
   const serverVersion = useMixerStore((state) => state.serverVersion)
+  const linkActive = useMixerStore((state) => state.linkActive)
+  const model = useMixerStore((state) => state.model)
+  const firmware = useMixerStore((state) => state.firmware)
+  const updatedAt = useMixerStore((state) => state.updatedAt)
+  const totalChannels = useMixerStore(channelCount)
+  const namedCount = useMixerStore((state) => namedChannels(state).length)
 
-  const isEngaged = connectionState !== 'disconnected'
-  const linkLabel =
-    connectionState === 'connected'
-      ? 'Desconectar'
-      : connectionState === 'connecting'
-        ? 'Cancelar'
-        : 'Conectar'
+  // El botón sigue al socket; la insignia sigue a la mesa. No son lo mismo:
+  // el backend puede estar en línea con la Qu-16 apagada.
+  const isEngaged = linkActive
+  const linkLabel = !linkActive
+    ? 'Conectar'
+    : connectionState === 'connecting'
+      ? 'Cancelar'
+      : 'Desconectar'
+
+  const hardwareLabel = [model, firmware !== null ? `fw ${firmware}` : null]
+    .filter((part): part is string => part !== null)
+    .join(' · ')
 
   const handleLinkClick = () => {
     if (isEngaged) {
@@ -107,7 +125,15 @@ function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {hardwareLabel !== '' ? (
+              <span
+                className="max-w-[170px] truncate font-mono text-[9px] tracking-[0.14em] text-console-faint"
+                title={hardwareLabel}
+              >
+                {hardwareLabel}
+              </span>
+            ) : null}
             <ConnectionBadge
               state={connectionState}
               serverVersion={serverVersion}
@@ -129,13 +155,14 @@ function App() {
           <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-console-faint">
-                Entradas · banco A
+                Mesa · volcado en vivo
               </p>
               <h2
                 id="channel-rack-title"
                 className="mt-1 text-[13px] font-semibold tracking-[0.01em] text-console-ink"
               >
-                Canales 1–8
+                Canales
+                {totalChannels > 0 ? ` · ${namedCount} con nombre` : ''}
               </h2>
             </div>
 
@@ -145,10 +172,13 @@ function App() {
                   aria-hidden="true"
                   className="h-1 w-1 rounded-full bg-accent-cyan/80"
                 />
-                Vista local
+                Datos en vivo
               </span>
-              <span className="rounded border border-console-line bg-console-panel/70 px-2 py-1 tabular-nums text-console-muted">
-                8 / 16
+              <span
+                className="rounded border border-console-line bg-console-panel/70 px-2 py-1 tabular-nums text-console-muted"
+                title="Canales con nombre / canales recibidos"
+              >
+                {namedCount} / {totalChannels}
               </span>
             </div>
           </div>
@@ -161,10 +191,19 @@ function App() {
                 aria-hidden="true"
                 className="h-1.5 w-1.5 rounded-full bg-accent-amber/80 shadow-[0_0_6px_rgba(245,165,36,0.45)]"
               />
-              Maqueta de Fase 1 · los faders aún no envían comandos
+              Fase 2 · canales reales por WebSocket · faders de solo lectura
             </p>
             <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint">
-              Bucles de 16 canales · medidores en vivo pendientes
+              {updatedAt !== null ? (
+                <>
+                  Actualizado{' '}
+                  <time dateTime={updatedAt} className="tabular-nums text-console-muted">
+                    {formatUpdatedAt(updatedAt)}
+                  </time>
+                </>
+              ) : (
+                'Medidores de maqueta · datos aún sin recibir'
+              )}
             </p>
           </div>
         </section>
@@ -178,7 +217,7 @@ function App() {
           </p>
           <p className="flex flex-wrap items-center gap-2">
             <span className="h-1 w-1 rounded-full bg-accent-cyan/70" aria-hidden="true" />
-            <span>Fase 1 · esqueleto UI</span>
+            <span>Fase 2 · datos de la mesa</span>
             <span aria-hidden="true" className="text-console-line-strong">
               /
             </span>

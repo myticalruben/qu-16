@@ -1,29 +1,39 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import {
-  FADER_MAX_DB,
-  FADER_MIN_DB,
-  demoChannels,
-  useMixerStore,
-} from '../mixer'
+import type { MixerStatePayload } from '../mixer'
+import { channelCount, namedChannels, useMixerStore } from '../mixer'
+
+const SNAPSHOT: MixerStatePayload = {
+  connected: true,
+  model: 'QU-16',
+  firmware: '1.97',
+  updated_at: '2026-11-12T01:10:00+00:00',
+  channels: [
+    { index: 4, name: 'coro2', level_db: 6.5, kind: 'input' },
+    { index: 1, name: 'coro1', level_db: 4.9, kind: 'input' },
+    { index: 3, name: '', level_db: null, kind: 'other' },
+    { index: 2, name: '  ', level_db: -12, kind: 'stereo' },
+  ],
+}
 
 describe('mixer store', () => {
   beforeEach(() => {
     useMixerStore.getState().reset()
   })
 
-  it('arranca desconectado, sin versión y con los canales de ejemplo', () => {
+  it('arranca vacío, desconectado y sin versión', () => {
     const state = useMixerStore.getState()
 
     expect(state.connectionState).toBe('disconnected')
+    expect(state.connected).toBe(false)
     expect(state.serverVersion).toBeNull()
-    expect(state.channels).toHaveLength(8)
-    expect(state.channels.map((channel) => channel.name)).toEqual(
-      demoChannels.map((channel) => channel.name),
-    )
+    expect(state.model).toBeNull()
+    expect(state.firmware).toBeNull()
+    expect(state.updatedAt).toBeNull()
+    expect(state.channels).toEqual([])
   })
 
-  it('actualiza el estado de conexión', () => {
+  it('actualiza el estado de conexión del socket', () => {
     useMixerStore.getState().setConnectionState('connecting')
     expect(useMixerStore.getState().connectionState).toBe('connecting')
 
@@ -42,50 +52,76 @@ describe('mixer store', () => {
     expect(useMixerStore.getState().serverVersion).toBeNull()
   })
 
-  it('mueve el fader dentro de los límites de la consola', () => {
-    useMixerStore.getState().setChannelFader(1, 0)
-    expect(useMixerStore.getState().channels[0]?.faderDb).toBe(0)
+  it('normaliza, ordena por índice y guarda levelDb null', () => {
+    useMixerStore.getState().applyState(SNAPSHOT)
 
-    useMixerStore.getState().setChannelFader(1, FADER_MAX_DB + 40)
-    expect(useMixerStore.getState().channels[0]?.faderDb).toBe(FADER_MAX_DB)
+    const state = useMixerStore.getState()
+    expect(state.connected).toBe(true)
+    expect(state.model).toBe('QU-16')
+    expect(state.firmware).toBe('1.97')
+    expect(state.updatedAt).toBe('2026-11-12T01:10:00+00:00')
+    expect(state.channels.map((channel) => channel.index)).toEqual([1, 2, 3, 4])
 
-    useMixerStore.getState().setChannelFader(1, FADER_MIN_DB - 40)
-    expect(useMixerStore.getState().channels[0]?.faderDb).toBe(FADER_MIN_DB)
+    expect(state.channels[0]).toEqual({
+      index: 1,
+      name: 'coro1',
+      levelDb: 4.9,
+      kind: 'input',
+    })
+    expect(state.channels[1]).toEqual({
+      index: 2,
+      name: '',
+      levelDb: -12,
+      kind: 'stereo',
+    })
+    expect(state.channels[2]).toEqual({
+      index: 3,
+      name: '',
+      levelDb: null,
+      kind: 'other',
+    })
+    expect(state.channels[3]?.levelDb).toBe(6.5)
   })
 
-  it('alterna el mute de un canal sin tocar los demás', () => {
-    const original = useMixerStore.getState().channels[1]?.muted
+  it('refleja una mesa desconectada y vacía los canales', () => {
+    useMixerStore.getState().applyState({
+      connected: false,
+      model: null,
+      firmware: null,
+      updated_at: null,
+      channels: [],
+    })
 
-    useMixerStore.getState().toggleChannelMute(2)
-
-    const channels = useMixerStore.getState().channels
-    expect(channels[1]?.muted).toBe(!original)
-    expect(channels[0]?.muted).toBe(false)
+    const state = useMixerStore.getState()
+    expect(state.connected).toBe(false)
+    expect(state.channels).toEqual([])
+    expect(state.model).toBeNull()
   })
 
-  it('normaliza el nivel del medidor entre 0 y 1', () => {
-    useMixerStore.getState().setChannelMeter(3, 1.8)
-    expect(useMixerStore.getState().channels[2]?.meter).toBe(1)
+  it('expone selectores de total y de canales con nombre', () => {
+    useMixerStore.getState().applyState(SNAPSHOT)
 
-    useMixerStore.getState().setChannelMeter(3, -0.5)
-    expect(useMixerStore.getState().channels[2]?.meter).toBe(0)
+    const state = useMixerStore.getState()
+    expect(channelCount(state)).toBe(4)
+    expect(namedChannels(state).map((channel) => channel.name)).toEqual([
+      'coro1',
+      'coro2',
+    ])
   })
 
-  it('reemplaza canales con una copia defensiva', () => {
-    const replacement = [
-      {
-        id: 1,
-        name: 'voz principal',
-        faderDb: -6,
-        meter: 0.4,
-        muted: false,
-        accent: 'cyan' as const,
-      },
-    ]
+  it('reset vuelve al estado vacío inicial', () => {
+    useMixerStore.getState().applyState(SNAPSHOT)
+    useMixerStore.getState().setConnectionState('connected')
+    useMixerStore.getState().setLinkActive(true)
+    useMixerStore.getState().setServerVersion('0.1.0')
 
-    useMixerStore.getState().setChannels(replacement)
+    useMixerStore.getState().reset()
 
-    expect(useMixerStore.getState().channels).toEqual(replacement)
-    expect(useMixerStore.getState().channels).not.toBe(replacement)
+    const state = useMixerStore.getState()
+    expect(state.connectionState).toBe('disconnected')
+    expect(state.linkActive).toBe(false)
+    expect(state.serverVersion).toBeNull()
+    expect(state.channels).toEqual([])
+    expect(state.connected).toBe(false)
   })
 })

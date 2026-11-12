@@ -25,6 +25,9 @@ services:
     environment:
       QU16_MIXER_HOST: ${QU16_MIXER_HOST:-192.168.100.67}
       QU16_MIXER_PORT: ${QU16_MIXER_PORT:-51326}
+      # El backend abre la conexión con la mesa al arrancar. Sin esto la API
+      # queda en modo pasivo y no hay datos que mostrar.
+      QU16_AUTO_CONNECT: "${QU16_AUTO_CONNECT:-true}"
     restart: unless-stopped
     healthcheck:
       # Se usa python (presente en la imagen del backend) para no depender de

@@ -45,7 +45,7 @@ dev: ## Arranca backend (8000) y frontend (5173) en paralelo
 	@echo "Frontend -> http://localhost:$(FRONTEND_PORT)"
 	@echo "Ctrl+C detiene ambos procesos."
 	@trap 'kill $$(jobs -p) 2>/dev/null; exit 130' INT TERM; \
-	( cd $(BACKEND_DIR) && QU16_MIXER_HOST=$(QU16_MIXER_HOST) QU16_MIXER_PORT=$(QU16_MIXER_PORT) \
+	( cd $(BACKEND_DIR) && QU16_MIXER_HOST=$(QU16_MIXER_HOST) QU16_MIXER_PORT=$(QU16_MIXER_PORT) QU16_AUTO_CONNECT=true \
 		PYTHONPATH=src .venv/bin/python -m uvicorn qu16_api.main:app --reload --host 0.0.0.0 --port $(BACKEND_PORT) ) & \
 	( cd $(FRONTEND_DIR) && npm run dev ) & \
 	wait
