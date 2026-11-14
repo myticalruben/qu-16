@@ -22,7 +22,8 @@ import random
 import socket
 from collections.abc import Awaitable, Callable
 
-from .client import QuClient
+from . import dsp
+from .client import QuClient, QuError
 from .meters import MeterState, decode_packet
 from .mirror import StateMirror
 from .protocol import constants as C
@@ -30,9 +31,9 @@ from .protocol.framing import DspCommand, SystemPacket
 
 logger = logging.getLogger(__name__)
 
-#: La escritura en la mesa se habilita en la Fase 4 y solo tras confirmación
-#: explícita con el operador. Mientras esté en ``False`` el enlace rechaza
-#: cualquier ``DspCommand`` antes de llegar al socket.
+#: Interruptor global de escritura. Además de esto, cada enlace debe crearse con
+#: ``write_enabled=True``. Con cualquiera de los dos en ``False`` el enlace
+#: rechaza cualquier ``DspCommand`` antes de llegar al socket.
 WRITE_ENABLED = False
 
 #: Latido que espera la mesa para no dar la sesión por perdida. No es un
@@ -156,6 +157,7 @@ class MixerLink:
         on_state: SnapshotCallback | None = None,
         meters: MeterState | None = None,
         meters_enabled: bool = True,
+        write_enabled: bool = False,
         meters_port: int = 53441,
         reconnect_min: float = 1.0,
         reconnect_max: float = 30.0,
@@ -163,6 +165,7 @@ class MixerLink:
         timeout: float = 6.0,
         jitter: float = 0.1,
     ) -> None:
+        self.write_enabled = write_enabled
         if reconnect_min <= 0 or reconnect_max < reconnect_min:
             raise ValueError("rango de reconexión inválido")
         if keepalive_interval <= 0:
@@ -342,11 +345,26 @@ class MixerLink:
         self, client: QuClient, packet: SystemPacket | DspCommand
     ) -> None:
         """Único punto de salida hacia la mesa; bloquea comandos DSP en Fase 2."""
-        if isinstance(packet, DspCommand) and not WRITE_ENABLED:
+        if isinstance(packet, DspCommand) and not (WRITE_ENABLED and self.write_enabled):
             raise WriteDisabledError(
-                "escritura deshabilitada: los comandos DSP se habilitan en la Fase 4"
+                "escritura deshabilitada: requiere WRITE_ENABLED y write_enabled"
             )
         await client.send(packet)
+
+    async def set_level(self, channel: int, raw: int) -> None:
+        """Fija el nivel principal de un canal (escritura en la mesa).
+
+        Requiere que el enlace se haya creado con ``write_enabled=True``. El
+        valor es el crudo de 16 bits de la misma escala que el volcado.
+        """
+        if not self.write_enabled:
+            raise WriteDisabledError(
+                "el enlace se creó en solo lectura; pasa write_enabled=True"
+            )
+        client = self._client
+        if client is None or not client.connected:
+            raise QuError("sin conexión con la mesa")
+        await self._send(client, dsp.main_level(channel, raw))
 
     async def _publish(self) -> None:
         """Entrega la instantánea actual al callback, sin romper el bucle."""
