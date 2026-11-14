@@ -15,7 +15,7 @@ Qu-Pad y Mixing Station. No se depende de ninguna app de terceros.
 | 0 | Codec CMNet: handshake, volcado de estado, ley de fader | ✅ |
 | 1 | Monorepo, esqueletos de backend y frontend, Compose, CI | ✅ |
 | 2 | `MixerLink` + espejo de estado + reconexión (solo lectura) | ✅ |
-| 3 | UI de mezcla real y medidores | ⏳ |
+| 3 | Medidores reales por UDP y UI de mezcla | ✅ |
 | 4 | EQ, GEQ y dinámica | ⏳ |
 | 5 | Audio USB-B: RTA y LUFS | ⏳ |
 | 6 | Asistente de IA de ecualización | ⏳ |

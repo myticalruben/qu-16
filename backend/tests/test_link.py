@@ -28,7 +28,7 @@ async def wait_for(
 
 async def test_link_builds_mirror_from_fake_mixer() -> None:
     """El enlace completa handshake + volcado y el espejo queda poblado."""
-    mixer = await FakeMixer().start()
+    mixer = await FakeMixer(send_meters=False).start()
     mirror = StateMirror()
     snapshots: list[dict[str, object]] = []
     link = MixerLink(
@@ -37,6 +37,7 @@ async def test_link_builds_mirror_from_fake_mixer() -> None:
         mirror=mirror,
         on_state=snapshots.append,
         keepalive_interval=0.02,
+        meters_enabled=False,
         reconnect_min=0.05,
         reconnect_max=0.2,
     )
@@ -65,7 +66,9 @@ async def test_link_builds_mirror_from_fake_mixer() -> None:
             "level_db": 4.9,
             "kind": "input",
         }
-        assert channels[0]["kind"] == "stereo"
+        # Calibrado contra la mesa: canal 1 = índice 0, así que 0-15 son entradas.
+        assert channels[0]["kind"] == "input"
+        assert channels[16]["kind"] == "stereo"
         assert channels[19]["kind"] == "other"
         assert channels[0]["name"] == "inala1"
 
@@ -82,7 +85,7 @@ async def test_link_builds_mirror_from_fake_mixer() -> None:
 
 async def test_link_marks_disconnected_when_mixer_closes() -> None:
     """Si la mesa cierra la conexión, el enlace publica ``connected=False``."""
-    mixer = await FakeMixer().start()
+    mixer = await FakeMixer(send_meters=False).start()
     mirror = StateMirror()
     snapshots: list[dict[str, object]] = []
     link = MixerLink(
@@ -91,6 +94,7 @@ async def test_link_marks_disconnected_when_mixer_closes() -> None:
         mirror=mirror,
         on_state=snapshots.append,
         keepalive_interval=0.02,
+        meters_enabled=False,
         reconnect_min=0.05,
         reconnect_max=0.2,
     )

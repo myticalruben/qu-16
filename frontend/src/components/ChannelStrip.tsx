@@ -5,13 +5,11 @@ import { MeterBar } from './MeterBar'
 interface ChannelStripProps {
   index: number
   name: string
-  /** Nivel real del backend en dB; `null` equivale a −∞. */
-  levelDb: number | null
+  /** Nivel del fader en dB; `null` equivale a −∞. */
+  faderDb: number | null
   kind: ChannelKind
-  /** Nivel 0..1 de la maqueta animada de medidores. */
-  meterLevel?: number
-  /** Si es `false` (mesa desconectada), el medidor se queda a cero y quieto. */
-  meterActive?: boolean
+  /** Nivel instantáneo del medidor en dB; `null` equivale a silencio. */
+  meterDb: number | null
 }
 
 /** Marcas de referencia del fader; el recorrido es lineal en dB. */
@@ -35,35 +33,34 @@ const clamp = (value: number, min: number, max: number): number =>
 const tickTop = (db: number): number =>
   ((FADER_MAX_DB - db) / (FADER_MAX_DB - FADER_MIN_DB)) * 100
 
-/** Un `level_db` nulo ocupa el mínimo del recorrido, como en la consola real. */
-const faderPosition = (levelDb: number | null): number =>
-  levelDb === null ? FADER_MIN_DB : clamp(levelDb, FADER_MIN_DB, FADER_MAX_DB)
+/** Un fader nulo ocupa el mínimo del recorrido, como en la consola real. */
+const faderPosition = (faderDb: number | null): number =>
+  faderDb === null ? FADER_MIN_DB : clamp(faderDb, FADER_MIN_DB, FADER_MAX_DB)
 
 /** Formato de consola: −∞ en el mínimo y un decimal con signo. */
-const formatDb = (levelDb: number | null): string => {
-  if (levelDb === null || levelDb <= FADER_MIN_DB + 0.05) return '−∞'
-  if (Math.abs(levelDb) < 0.05) return '0.0'
-  return `${levelDb > 0 ? '+' : '−'}${Math.abs(levelDb).toFixed(1)}`
+const formatDb = (faderDb: number | null): string => {
+  if (faderDb === null || faderDb <= FADER_MIN_DB + 0.05) return '−∞'
+  if (Math.abs(faderDb) < 0.05) return '0.0'
+  return `${faderDb > 0 ? '+' : '−'}${Math.abs(faderDb).toFixed(1)}`
 }
 
-const ariaDb = (levelDb: number | null): string =>
-  levelDb === null || levelDb <= FADER_MIN_DB + 0.05
+const ariaDb = (faderDb: number | null): string =>
+  faderDb === null || faderDb <= FADER_MIN_DB + 0.05
     ? 'menos infinito'
-    : `${levelDb.toFixed(1)} dB`
+    : `${faderDb.toFixed(1)} dB`
 
 export function ChannelStrip({
   index,
   name,
-  levelDb,
+  faderDb,
   kind,
-  meterLevel = 0,
-  meterActive = false,
+  meterDb,
 }: ChannelStripProps) {
   const unnamed = name.trim() === ''
   const displayName = unnamed ? '—' : name
   const channelNumber = String(index).padStart(2, '0')
   const accent = kind === 'stereo' ? 'amber' : 'cyan'
-  const faderDb = faderPosition(levelDb)
+  const faderPositionDb = faderPosition(faderDb)
   const accessibleName = unnamed ? `canal ${index}` : name
   const kindLabel = KIND_LABELS[kind]
   const kindName = KIND_NAMES[kind]
@@ -105,7 +102,7 @@ export function ChannelStrip({
         aria-live="off"
       >
         <span className="sr-only">Ganancia: </span>
-        {formatDb(levelDb)}
+        {formatDb(faderDb)}
         <span className="ml-1 text-[8px] tracking-[0.08em] text-console-faint">
           dB
         </span>
@@ -113,9 +110,7 @@ export function ChannelStrip({
 
       <div className="mt-2 flex h-44 items-stretch justify-center gap-1.5">
         <MeterBar
-          level={meterActive ? meterLevel : 0}
-          animated={meterActive && meterLevel > 0}
-          seed={index}
+          levelDb={meterDb}
           label={`Medidor de ${accessibleName}`}
         />
 
@@ -144,11 +139,11 @@ export function ChannelStrip({
             min={FADER_MIN_DB}
             max={FADER_MAX_DB}
             step={0.5}
-            value={faderDb}
+            value={faderPositionDb}
             disabled
             title="Fader de solo lectura: los comandos llegan en la Fase 3"
             aria-label={`Fader de ${accessibleName}`}
-            aria-valuetext={ariaDb(levelDb)}
+            aria-valuetext={ariaDb(faderDb)}
             className="fader-range absolute left-1/2 top-1/2 h-8 w-44 -translate-x-1/2 -translate-y-1/2 -rotate-90 disabled:cursor-not-allowed"
           />
         </div>

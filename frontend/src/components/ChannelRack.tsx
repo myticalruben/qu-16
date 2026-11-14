@@ -1,21 +1,33 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 
 import type { Channel } from '../store/mixer'
-import { namedChannels, useMixerStore } from '../store/mixer'
+import { levelFor, namedChannels, useMixerStore } from '../store/mixer'
 import { ChannelStrip } from './ChannelStrip'
 
 /**
- * Nivel de maqueta determinista por canal. Los medidores reales llegan en la
- * Fase 3; hasta entonces basta con que el rack tenga vida sin parpadear de
- * forma distinta en cada render.
+ * Cada tira se suscribe a su propia posición de `levels`, no al array entero.
+ * El selector devuelve un número (o `null`), así que a 20 mensajes/s solo se
+ * vuelve a pintar el canal cuyo nivel cambió; el rack y el resto de tiras no
+ * se re-renderizan. `memo` es la segunda barrera: aunque el rack se repinte
+ * por un `state`, las tiras con el mismo `channel` no se tocan.
  */
-const demoMeterLevel = (index: number): number => {
-  const seed = Math.abs(Math.sin(index * 12.9898))
-  return 0.2 + seed * 0.55
-}
+const MeteredChannelStrip = memo(function MeteredChannelStrip({
+  channel,
+}: {
+  channel: Channel
+}) {
+  const meterDb = useMixerStore((state) => levelFor(state, channel.index))
 
-const meterLevelFor = (channel: Channel): number =>
-  channel.levelDb === null ? 0 : demoMeterLevel(channel.index)
+  return (
+    <ChannelStrip
+      index={channel.index}
+      name={channel.name}
+      faderDb={channel.levelDb}
+      kind={channel.kind}
+      meterDb={meterDb}
+    />
+  )
+})
 
 /** Aviso intermedio cuando hay canales pero ninguno tiene nombre. */
 function UnnamedNotice({ onShowAll }: { onShowAll: () => void }) {
@@ -72,9 +84,6 @@ function EmptyRack() {
  */
 export function ChannelRack() {
   const channels = useMixerStore((state) => state.channels)
-  const meterActive = useMixerStore(
-    (state) => state.connected && state.connectionState === 'connected',
-  )
   const namedCount = useMixerStore((state) => namedChannels(state).length)
   const [showAll, setShowAll] = useState(false)
 
@@ -121,14 +130,7 @@ export function ChannelRack() {
           >
             {visibleChannels.map((channel) => (
               <div role="listitem" key={channel.index} className="min-w-0">
-                <ChannelStrip
-                  index={channel.index}
-                  name={channel.name}
-                  levelDb={channel.levelDb}
-                  kind={channel.kind}
-                  meterLevel={meterLevelFor(channel)}
-                  meterActive={meterActive}
-                />
+                <MeteredChannelStrip channel={channel} />
               </div>
             ))}
           </div>

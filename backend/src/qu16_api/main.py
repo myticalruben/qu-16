@@ -1,12 +1,15 @@
 """Aplicación FastAPI de qu16-control.
 
-La API sirve el estado del espejo en memoria y lo empuja por WebSocket. La
-conexión con la mesa solo se abre si ``QU16_AUTO_CONNECT`` está activo; con el
-valor por defecto (``false``) el proceso no abre ningún socket.
+La API sirve el estado del espejo en memoria y lo empuja por WebSocket, junto
+con los niveles de medidor (a un ritmo limitado por ``QU16_METERS_RATE_HZ``).
+La conexión con la mesa solo se abre si ``QU16_AUTO_CONNECT`` está activo; con
+el valor por defecto (``false``) el proceso no abre ningún socket.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -21,7 +24,7 @@ from qu16.link import MixerLink
 from . import __version__
 from .config import get_settings
 from .routers import health
-from .state import state_mirror
+from .state import state_meters, state_mirror
 from .ws import StateHub
 
 logger = logging.getLogger(__name__)
@@ -67,12 +70,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Arrancando %s %s", app.title, __version__)
 
     link: MixerLink | None = None
+    meters_task: asyncio.Task[None] | None = None
+
+    if settings.meters_enabled:
+        meters_task = asyncio.create_task(
+            state_hub.meters_loop(state_meters, settings.meters_rate_hz),
+            name="qu16-meters",
+        )
+
     if settings.auto_connect:
         link = MixerLink(
             settings.mixer_host,
             settings.mixer_port,
             mirror=state_mirror,
             on_state=state_hub.on_state,
+            meters=state_meters,
+            meters_enabled=settings.meters_enabled,
+            meters_port=settings.meters_port,
             reconnect_min=settings.reconnect_min,
             reconnect_max=settings.reconnect_max,
             keepalive_interval=settings.keepalive_interval,
@@ -94,6 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if link is not None:
             await link.stop()
+        if meters_task is not None:
+            meters_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await meters_task
         await state_mirror.mark_disconnected()
         logger.info("API detenida")
 

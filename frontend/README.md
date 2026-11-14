@@ -31,11 +31,12 @@ Al recibir un mensaje `hello` el store pasa a `connected` y guarda la versión
 del servidor; después, cada mensaje `state` sustituye el volcado de canales.
 La insignia distingue el enlace con el backend del enlace con la mesa: si el
 backend responde `connected: false`, muestra «Desconectado» aunque el socket
-siga abierto, y los medidores se detienen a cero.
+siga abierto, y dejan de llegar mensajes `meters`.
 
 El rack pinta por defecto solo los canales con nombre. El control «Mostrar
 todos» revela el resto (hasta decenas de canales), atenuados y con el nombre
-vacío. Los medidores siguen siendo una maqueta animada hasta la Fase 3; los
+vacío. Los medidores usan el nivel real de `meters` (−60 dB → 0 %, 0 dB →
+100 %, lineal en dB) con umbrales verde/ámbar/rojo y pico con caída suave; los
 faders son de solo lectura porque aún no envían comandos.
 
 ### Contrato mínimo con el backend
@@ -46,7 +47,9 @@ faders son de solo lectura porque aún no envían comandos.
   enlace como listo y `{ "type": "state", "payload": { connected, model,
   firmware, updated_at, channels } }` entrega el volcado. Cada canal llega como
   `{ index, name, level_db, kind }`, con `level_db: null` para −∞ y `kind` en
-  `input | stereo | other`. La reconexión es exponencial (1 s → 30 s).
+  `input | stereo | other`. `{ "type": "meters", "payload": { "levels": [...] } }`
+  llega hasta 20 veces por segundo; la posición es el índice de canal y cada
+  valor es dB (`null` para silencio). La reconexión es exponencial (1 s → 30 s).
 
 Los tipos viven en `src/lib/api.ts` y el cliente en `src/lib/ws.ts`.
 

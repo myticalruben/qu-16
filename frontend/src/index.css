@@ -169,19 +169,28 @@
       inset 0 2px 5px rgba(0, 0, 0, 0.85);
   }
 
+  /*
+   * El relleno cambia de familia cromática según el nivel: verde hasta −12 dB,
+   * ámbar de −12 a −3 dB y rojo por encima de −3 dB. La capa de segmentos LED
+   * se pinta encima y recorta visualmente el gradiente.
+   */
   .meter-bar__fill {
-    background: linear-gradient(
-      to top,
-      #0e7490 0%,
-      #22d3ee 32%,
-      #f5a524 72%,
-      #fb7185 93%,
-      #fecdd3 100%
-    );
+    background: linear-gradient(to top, #0e7490 0%, #22d3ee 100%);
     box-shadow: 0 0 10px rgba(34, 211, 238, 0.16);
     transition:
       height 140ms ease-out,
+      box-shadow 180ms ease,
       opacity 180ms ease;
+  }
+
+  .meter-bar__fill[data-zone='amber'] {
+    background: linear-gradient(to top, #b45309 0%, #f5a524 100%);
+    box-shadow: 0 0 10px rgba(245, 165, 36, 0.24);
+  }
+
+  .meter-bar__fill[data-zone='red'] {
+    background: linear-gradient(to top, #be123c 0%, #fb7185 100%);
+    box-shadow: 0 0 12px rgba(251, 113, 133, 0.32);
   }
 
   .meter-bar__segments {
@@ -197,19 +206,8 @@
     background: rgba(254, 226, 226, 0.9);
     box-shadow: 0 0 7px rgba(245, 165, 36, 0.7);
     pointer-events: none;
-  }
-
-  /*
-   * Pulso de maqueta de la Fase 2. La duración y el desfase llegan en línea
-   * desde MeterBar para que cada canal lata a un ritmo distinto. En la Fase 3
-   * el relleno pasará a ser el nivel real y esta clase desaparecerá.
-   */
-  .meter-bar__fill--demo {
-    transform-origin: bottom;
-    animation-name: meter-demo;
-    animation-timing-function: ease-in-out;
-    animation-iteration-count: infinite;
-    animation-direction: alternate;
+    /* La caída del pico se suaviza aquí; MeterBar solo actualiza la altura. */
+    transition: bottom 200ms linear;
   }
 
   /* ---------- Fader vertical hecho a mano ---------- */
@@ -354,16 +352,6 @@
   50% {
     opacity: 0.9;
     transform: scale(1.12);
-  }
-}
-
-@keyframes meter-demo {
-  from {
-    transform: scaleY(0.72);
-  }
-
-  to {
-    transform: scaleY(1.06);
   }
 }
 

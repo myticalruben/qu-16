@@ -1,7 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MixerStatePayload } from '../mixer'
-import { channelCount, namedChannels, useMixerStore } from '../mixer'
+import {
+  channelCount,
+  levelFor,
+  namedChannels,
+  useMixerStore,
+} from '../mixer'
 
 const SNAPSHOT: MixerStatePayload = {
   connected: true,
@@ -31,6 +36,7 @@ describe('mixer store', () => {
     expect(state.firmware).toBeNull()
     expect(state.updatedAt).toBeNull()
     expect(state.channels).toEqual([])
+    expect(state.levels).toEqual([])
   })
 
   it('actualiza el estado de conexión del socket', () => {
@@ -98,6 +104,41 @@ describe('mixer store', () => {
     expect(state.model).toBeNull()
   })
 
+  it('guarda los medidores y los expone por índice de canal', () => {
+    useMixerStore.getState().applyMeters([-104.5, null, -38.7])
+
+    const state = useMixerStore.getState()
+    expect(state.levels).toEqual([-104.5, null, -38.7])
+    expect(state.levelFor(0)).toBe(-104.5)
+    expect(state.levelFor(1)).toBeNull()
+    expect(state.levelFor(2)).toBe(-38.7)
+    expect(state.levelFor(58)).toBeNull()
+
+    // También se puede usar como selector puro sobre un estado concreto.
+    expect(levelFor(state, 2)).toBe(-38.7)
+    expect(levelFor(0)).toBe(-104.5)
+  })
+
+  it('degrada a silencio los valores inválidos de meters', () => {
+    useMixerStore.getState().applyMeters([Number.NaN, 'x', undefined, -12])
+
+    expect(useMixerStore.getState().levels).toEqual([null, null, null, -12])
+  })
+
+  it('no notifica si el mensaje meters repite los mismos valores', () => {
+    useMixerStore.getState().applyMeters([-12, -6])
+    const listener = vi.fn()
+    const unsubscribe = useMixerStore.subscribe(listener)
+
+    useMixerStore.getState().applyMeters([-12, -6])
+    expect(listener).not.toHaveBeenCalled()
+
+    useMixerStore.getState().applyMeters([-11, -6])
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    unsubscribe()
+  })
+
   it('expone selectores de total y de canales con nombre', () => {
     useMixerStore.getState().applyState(SNAPSHOT)
 
@@ -114,6 +155,7 @@ describe('mixer store', () => {
     useMixerStore.getState().setConnectionState('connected')
     useMixerStore.getState().setLinkActive(true)
     useMixerStore.getState().setServerVersion('0.1.0')
+    useMixerStore.getState().applyMeters([-12, null])
 
     useMixerStore.getState().reset()
 
@@ -122,6 +164,7 @@ describe('mixer store', () => {
     expect(state.linkActive).toBe(false)
     expect(state.serverVersion).toBeNull()
     expect(state.channels).toEqual([])
+    expect(state.levels).toEqual([])
     expect(state.connected).toBe(false)
   })
 })

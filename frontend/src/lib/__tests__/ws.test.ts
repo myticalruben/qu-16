@@ -96,6 +96,56 @@ describe('mixer WebSocket', () => {
     expect(state.connectionState).toBe('connected')
   })
 
+  it('aplica los meters al store sin tocar el estado de conexión', () => {
+    connectMixerSocket()
+    const socket = getSocket()
+
+    socket.open()
+    socket.receive({ type: 'hello', payload: { version: '0.1.0' } })
+    socket.receive({
+      type: 'state',
+      payload: {
+        connected: true,
+        model: 'QU-16',
+        firmware: '1.97',
+        updated_at: '2026-11-12T01:10:00+00:00',
+        channels: [
+          { index: 0, name: 'kick', level_db: 0, kind: 'input' },
+          { index: 1, name: 'snare', level_db: -6, kind: 'input' },
+          { index: 2, name: 'coro1', level_db: 4.9, kind: 'input' },
+        ],
+      },
+    })
+
+    const connectionBefore = useMixerStore.getState().connectionState
+    socket.receive({
+      type: 'meters',
+      payload: { levels: [-104.5, null, -38.7] },
+    })
+
+    const state = useMixerStore.getState()
+    expect(state.levels).toEqual([-104.5, null, -38.7])
+    expect(state.levelFor(0)).toBe(-104.5)
+    expect(state.levelFor(1)).toBeNull()
+    expect(state.levelFor(2)).toBe(-38.7)
+    expect(state.connectionState).toBe(connectionBefore)
+    expect(state.connected).toBe(true)
+  })
+
+  it('ignora un mensaje meters corrupto y mantiene el enlace', () => {
+    connectMixerSocket()
+    const socket = getSocket()
+
+    socket.open()
+    socket.receive({ type: 'hello', payload: { version: '0.1.0' } })
+    socket.receive({ type: 'meters', payload: { levels: 'no-es-una-lista' } })
+
+    const state = useMixerStore.getState()
+    expect(state.levels).toEqual([])
+    expect(state.connectionState).toBe('connected')
+    expect(state.serverVersion).toBe('0.1.0')
+  })
+
   it('refleja en la insignia una mesa apagada aunque el socket siga abierto', () => {
     connectMixerSocket()
     const socket = getSocket()

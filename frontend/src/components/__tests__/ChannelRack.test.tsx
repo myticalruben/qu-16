@@ -38,6 +38,26 @@ describe('ChannelRack', () => {
     expect(screen.queryByLabelText('Canal 2: sin nombre')).not.toBeInTheDocument()
   })
 
+  it('conecta cada medidor con el índice de canal del store', () => {
+    useMixerStore.getState().applyMeters([null, -12, null, null, -2.9])
+
+    render(<ChannelRack />)
+
+    const coro1Meter = screen.getByRole('meter', {
+      name: 'Medidor de coro1',
+    })
+    expect(
+      coro1Meter.querySelector('.meter-bar__fill'),
+    ).toHaveStyle({ height: '80%' })
+
+    const coro2Meter = screen.getByRole('meter', {
+      name: 'Medidor de coro2',
+    })
+    expect(
+      coro2Meter.querySelector('.meter-bar__fill'),
+    ).toHaveStyle({ height: '95%' })
+  })
+
   it('pinta todos los canales al activar el control y atenúa los vacíos', () => {
     render(<ChannelRack />)
 

@@ -22,11 +22,14 @@ from .protocol.framing import MixerVersion
 #: se llaman ``inala1``…, pero no hemos podido verificar que sean estéreo de
 #: forma general; se etiquetan ``"stereo"`` porque es la convención del
 #: volcado que sí hemos observado en esta fase.
-STEREO_INDEXES = frozenset({0, 1, 2})
-#: Índices 3-18: son los 16 canales de entrada de la Qu-16 (nombres reales
-#: ``coro1``, ``guitar``, ``piano``… en la captura). Es la única clasificación
-#: que hemos podido verificar contra la mesa real.
-INPUT_INDEXES = frozenset(range(3, 19))
+#: Los índices 0-15 son las 16 entradas de la Qu-16. Verificado el 2026-11-14:
+#: hablando por el canal 1 de la mesa solo se movió el medidor de índice 0, y
+#: los nombres reales (``inala1``, ``coro1``, ``guitar``, ``piano``…) aparecen
+#: en ese mismo orden.
+INPUT_INDEXES = frozenset(range(0, 16))
+#: Índices 16-18: las tres entradas estéreo (convención observada, no verificada
+#: con una prueba dedicada).
+STEREO_INDEXES = frozenset({16, 17, 18})
 
 #: Precisión con la que se publican los niveles: los mostradores de la mesa
 #: trabajan con una décima de dB.
@@ -36,10 +39,9 @@ _LEVEL_DECIMALS = 1
 def channel_kind(index: int) -> str:
     """Clasifica un canal por su índice en el volcado.
 
-    La clasificación es deliberadamente conservadora: solo los índices 3-18 se
-    consideran entradas (verificado) y 0-2 estéreo (convención observada). El
-    resto —mezclas, FX, grupos— queda como ``"other"`` hasta disponer de una
-    captura que permita verificarlo.
+    La clasificación es deliberadamente conservadora: los índices 0-15 son las
+    entradas (verificado contra la mesa), 16-18 se suponen estéreo, y el resto
+    —mezclas, FX, grupos— queda como ``"other"`` hasta poder verificarlo.
     """
     if index in INPUT_INDEXES:
         return "input"

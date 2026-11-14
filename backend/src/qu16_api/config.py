@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     reconnect_max: float = Field(default=30.0, gt=0)
     #: Periodo del latido de control mientras la sesión está viva.
     keepalive_interval: float = Field(default=0.5, gt=0)
+    #: Los medidores llegan por UDP al puerto anunciado en el handshake. Si se
+    #: desactivan no se abre el socket y el enlace sigue funcionando.
+    meters_enabled: bool = True
+    meters_port: int = Field(default=53441, ge=1, le=65535)
+    #: Tope de mensajes de medidores por segundo enviados por WebSocket.
+    meters_rate_hz: float = Field(default=20.0, gt=0)
     #: ``NoDecode`` evita que pydantic-settings intente decodificar la lista
     #: como JSON antes de que se ejecute el validador de abajo.
     cors_origins: Annotated[list[str], NoDecode] = Field(

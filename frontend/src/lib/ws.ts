@@ -133,6 +133,16 @@ function handleMessage(raw: unknown): void {
     // El socket puede estar abierto y la mesa apagada: para la insignia manda
     // el estado de la mesa, no el del socket.
     store.setConnectionState(state.connected ? 'connected' : 'disconnected')
+    return
+  }
+
+  if (message.type === 'meters') {
+    // Los medidores llegan a 20 Hz y son independientes del enlace: no tocan
+    // `connectionState` ni reinician el retroceso de reconexión.
+    const payload = isRecord(message.payload) ? message.payload : null
+    if (payload !== null && Array.isArray(payload.levels)) {
+      store.applyMeters(payload.levels)
+    }
   }
 }
 
