@@ -28,6 +28,9 @@ services:
       # El backend abre la conexión con la mesa al arrancar. Sin esto la API
       # queda en modo pasivo y no hay datos que mostrar.
       QU16_AUTO_CONNECT: "${QU16_AUTO_CONNECT:-true}"
+      # Candado de escritura. Apagado por defecto: la app solo lee.
+      # Ponlo en "true" para permitir mover faders desde el navegador.
+      QU16_WRITE_ENABLED: "${QU16_WRITE_ENABLED:-false}"
     restart: unless-stopped
     healthcheck:
       # Se usa python (presente en la imagen del backend) para no depender de
