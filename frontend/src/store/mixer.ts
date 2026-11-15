@@ -49,6 +49,61 @@ export interface MixerStatePayload {
 export const FADER_MIN_DB = -60
 export const FADER_MAX_DB = 10
 
+/** La Qu-16 solo controla por fader sus 16 entradas físicas (índices 0-15). */
+export const INPUT_CHANNEL_LIMIT = 16
+
+/** Los 16 canales de entrada, que es la selección visible por defecto. */
+export const DEFAULT_VISIBLE_CHANNELS: number[] = Array.from(
+  { length: INPUT_CHANNEL_LIMIT },
+  (_, index) => index,
+)
+
+export const VISIBLE_CHANNELS_STORAGE_KEY = 'qu16.visibleChannels'
+
+/**
+ * Normaliza la selección guardada: solo enteros entre 0 y 15, sin duplicados y
+ * ordenados. Devuelve `null` si el valor no es una lista (almacenamiento
+ * corrupto), para poder caer en la selección por defecto.
+ */
+function parseVisibleChannels(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null
+
+  const unique = new Set<number>()
+  for (const item of value) {
+    if (
+      typeof item === 'number' &&
+      Number.isInteger(item) &&
+      item >= 0 &&
+      item < INPUT_CHANNEL_LIMIT
+    ) {
+      unique.add(item)
+    }
+  }
+  return [...unique].sort((a, b) => a - b)
+}
+
+/** Lee la selección persistida; sin clave o con datos inválidos, los 16. */
+function readVisibleChannels(): number[] {
+  if (typeof localStorage === 'undefined') return [...DEFAULT_VISIBLE_CHANNELS]
+  try {
+    const raw = localStorage.getItem(VISIBLE_CHANNELS_STORAGE_KEY)
+    if (raw === null) return [...DEFAULT_VISIBLE_CHANNELS]
+    return parseVisibleChannels(JSON.parse(raw)) ?? [...DEFAULT_VISIBLE_CHANNELS]
+  } catch {
+    return [...DEFAULT_VISIBLE_CHANNELS]
+  }
+}
+
+/** Persiste la selección; si el navegador la bloquea, la sesión sigue igual. */
+function persistVisibleChannels(channels: number[]): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(VISIBLE_CHANNELS_STORAGE_KEY, JSON.stringify(channels))
+  } catch {
+    // Modo privado o cuota llena: la preferencia solo dura esta sesión.
+  }
+}
+
 const EMPTY_SNAPSHOT: MixerSnapshot = {
   connected: false,
   model: null,
@@ -123,6 +178,11 @@ export interface MixerState extends MixerSnapshot {
   lastError: string | null
   /** Canales que se están arrastrando: el WS no debe pisar su nivel. */
   draggingChannels: number[]
+  /**
+   * Índices de los canales de entrada que se pintan en el rack. Es una
+   * preferencia del operador y se persiste en `localStorage`.
+   */
+  visibleChannels: number[]
   setConnectionState: (state: ConnectionState) => void
   setLinkActive: (active: boolean) => void
   setServerVersion: (version: string | null) => void
@@ -139,6 +199,10 @@ export interface MixerState extends MixerSnapshot {
   endChannelDrag: (index: number) => void
   /** Aplica el nivel optimista del fader sin esperar al backend. */
   setChannelLevelDb: (index: number, levelDb: number | null) => void
+  /** Actualiza la selección y la guarda en `localStorage`. */
+  setVisibleChannels: (channels: number[]) => void
+  /** Relee la selección guardada; se llama al montar la consola. */
+  hydrateVisibleChannels: () => void
   /** Aplica un mensaje `state`: normaliza snake_case, ordena y guarda. */
   applyState: (payload: MixerStatePayload) => void
   /**
@@ -163,6 +227,7 @@ export const useMixerStore = create<MixerState>()((set, get) => ({
   writeConfig: null,
   lastError: null,
   draggingChannels: [],
+  visibleChannels: readVisibleChannels(),
 
   setConnectionState: (connectionState) => set({ connectionState }),
 
@@ -218,6 +283,21 @@ export const useMixerStore = create<MixerState>()((set, get) => ({
     })
   },
 
+  setVisibleChannels: (channels) => {
+    const next = parseVisibleChannels(channels) ?? []
+    persistVisibleChannels(next)
+    set({ visibleChannels: next })
+  },
+
+  hydrateVisibleChannels: () => {
+    const next = readVisibleChannels()
+    const current = get().visibleChannels
+    const same =
+      next.length === current.length &&
+      next.every((index, position) => index === current[position])
+    if (!same) set({ visibleChannels: next })
+  },
+
   applyState: (payload) => {
     const dragging = get().draggingChannels
     const previous = get().channels
@@ -267,6 +347,8 @@ export const useMixerStore = create<MixerState>()((set, get) => ({
       writeConfig: null,
       lastError: null,
       draggingChannels: [],
+      // `visibleChannels` queda intacto: es una preferencia del operador, no
+      // parte del volcado que se descarta al desconectar.
     }),
 }))
 
@@ -276,6 +358,12 @@ export const channelCount = (state: MixerState): number => state.channels.length
 /** Canales con nombre visible; el rack los muestra por defecto. */
 export const namedChannels = (state: MixerState): Channel[] =>
   state.channels.filter((channel) => channel.name.trim() !== '')
+
+/** Los canales que la mesa puede controlar: solo los índices 0-15. */
+export const inputChannels = (state: MixerState): Channel[] =>
+  state.channels.filter(
+    (channel) => channel.index >= 0 && channel.index < INPUT_CHANNEL_LIMIT,
+  )
 
 /**
  * Selector puro de nivel de medidor. Acepta `levelFor(state, index)` para

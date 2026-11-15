@@ -1,8 +1,13 @@
-import { memo, useCallback, useState } from 'react'
+import { memo, useCallback, useEffect } from 'react'
 
 import { ApiError, writeChannelLevel } from '../lib/api'
 import type { Channel } from '../store/mixer'
-import { levelFor, namedChannels, useMixerStore } from '../store/mixer'
+import {
+  DEFAULT_VISIBLE_CHANNELS,
+  INPUT_CHANNEL_LIMIT,
+  levelFor,
+  useMixerStore,
+} from '../store/mixer'
 import { ChannelStrip } from './ChannelStrip'
 
 /** Traduce el fallo HTTP a un aviso corto, sin jerga ni detalles internos. */
@@ -47,20 +52,37 @@ const MeteredChannelStrip = memo(function MeteredChannelStrip({
   )
 })
 
-/** Aviso intermedio cuando hay canales pero ninguno tiene nombre. */
-function UnnamedNotice({ onShowAll }: { onShowAll: () => void }) {
+/** Aviso cuando el operador ha desmarcado los 16 canales de entrada. */
+function NoSelectionNotice({ onShowAll }: { onShowAll: () => void }) {
   return (
-    <div className="rounded-xl border border-dashed border-console-line bg-console-panel/40 px-6 py-10 text-center">
-      <p className="text-[12px] font-medium text-console-muted">
-        La mesa no reporta ningún canal con nombre
+    <div className="rounded-xl border border-dashed border-console-line bg-console-panel/40 px-6 py-12 text-center">
+      <p className="text-[13px] font-medium text-console-muted">
+        Ningún canal seleccionado
+      </p>
+      <p className="mt-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-console-faint">
+        Abre «Canales» en la cabecera para elegir qué controlar
       </p>
       <button
         type="button"
         onClick={onShowAll}
         className="mt-3 rounded-md border border-console-line bg-console-raised/80 px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-console-muted transition-colors duration-200 hover:border-accent-cyan/45 hover:text-console-ink"
       >
-        Mostrar todos los canales
+        Mostrar los 16
       </button>
+    </div>
+  )
+}
+
+/** Aviso para un volcado que no trae ninguno de los índices 0-15. */
+function NoInputNotice() {
+  return (
+    <div className="rounded-xl border border-dashed border-console-line bg-console-panel/40 px-6 py-12 text-center">
+      <p className="text-[13px] font-medium text-console-muted">
+        La mesa no reporta los canales de entrada
+      </p>
+      <p className="mt-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-console-faint">
+        El volcado recibido no incluye los índices 0-15
+      </p>
     </div>
   )
 }
@@ -97,15 +119,24 @@ function EmptyRack() {
  * Fila de canales. El grid mantiene un ancho mínimo legible y deja que el
  * contenedor haga scroll horizontal en pantallas estrechas.
  *
- * Por defecto solo se pintan los canales con nombre; el backend puede enviar
- * decenas de canales vacíos y no interesa inundar el rack.
+ * Solo se pintan los canales de entrada (índices 0-15) marcados en el menú de
+ * la cabecera. El backend puede mandar 60 canales: los de índice 16 o mayor
+ * son mezclas y destinos que esta consola no controla y no deben llegar al DOM.
  */
 export function ChannelRack() {
   const channels = useMixerStore((state) => state.channels)
-  const namedCount = useMixerStore((state) => namedChannels(state).length)
+  const visibleChannels = useMixerStore((state) => state.visibleChannels)
+  const setVisibleChannels = useMixerStore((state) => state.setVisibleChannels)
+  const hydrateVisibleChannels = useMixerStore(
+    (state) => state.hydrateVisibleChannels,
+  )
   const controlEnabled = useMixerStore((state) => state.controlEnabled)
   const connected = useMixerStore((state) => state.connected)
-  const [showAll, setShowAll] = useState(false)
+
+  // La preferencia puede haberse cargado antes de que existiera la clave.
+  useEffect(() => {
+    hydrateVisibleChannels()
+  }, [hydrateVisibleChannels])
 
   // Sin candado o sin mesa no se escribe. La tira decide además si el canal
   // tiene nombre; los vacíos siguen visibles pero nunca arrastrables.
@@ -136,20 +167,39 @@ export function ChannelRack() {
     return <EmptyRack />
   }
 
-  const visibleChannels = showAll
-    ? channels
-    : channels.filter((channel) => channel.name.trim() !== '')
+  if (visibleChannels.length === 0) {
+    return (
+      <NoSelectionNotice
+        onShowAll={() => setVisibleChannels(DEFAULT_VISIBLE_CHANNELS)}
+      />
+    )
+  }
+
+  const selected = new Set(visibleChannels)
+  // El filtro es por índice, no por tipo ni por nombre: es el dato que la mesa
+  // mantiene estable. Los canales ocultos no se montan, así que tampoco se
+  // suscriben a los medidores ni se repintan con cada mensaje.
+  const visibleInputs = channels.filter(
+    (channel) =>
+      channel.index >= 0 &&
+      channel.index < INPUT_CHANNEL_LIMIT &&
+      selected.has(channel.index),
+  )
+
+  if (visibleInputs.length === 0) {
+    return <NoInputNotice />
+  }
 
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
         <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint">
-          {showAll ? 'Todos los canales' : 'Solo canales con nombre'}
+          Entradas 1-{INPUT_CHANNEL_LIMIT}
           <span className="ml-2 text-console-line-strong" aria-hidden="true">
             /
           </span>
           <span className="ml-2 tabular-nums text-console-muted">
-            {showAll ? channels.length : namedCount} de {channels.length}
+            {visibleInputs.length} en pantalla
           </span>
         </p>
 
@@ -164,46 +214,32 @@ export function ChannelRack() {
               solo lectura
             </span>
           )}
-
-          <label className="inline-flex cursor-pointer select-none items-center gap-2 font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint transition-colors duration-150 hover:text-console-muted">
-            <input
-              type="checkbox"
-              checked={showAll}
-              onChange={(event) => setShowAll(event.target.checked)}
-              className="h-3.5 w-3.5 cursor-pointer rounded-sm border border-console-line-strong bg-console-void accent-[#22d3ee]"
-            />
-            Mostrar todos
-          </label>
         </div>
       </div>
 
-      {visibleChannels.length === 0 ? (
-        <UnnamedNotice onShowAll={() => setShowAll(true)} />
-      ) : (
-        <div className="rack-scroll -mx-1 overflow-x-auto px-1 pb-2">
-          <div
-            role="list"
-            aria-label="Canales de entrada"
-            className="grid grid-flow-col auto-cols-[minmax(100px,132px)] justify-start gap-2"
-          >
-            {visibleChannels.map((channel) => (
-              <div
-                role="listitem"
-                // Al cambiar el candado se remonta la tira: se descarta
-                // cualquier borrador de arrastre y se parte del nivel real.
-                key={`${channel.index}:${interactive ? 'live' : 'locked'}`}
-                className="min-w-0"
-              >
-                <MeteredChannelStrip
-                  channel={channel}
-                  interactive={interactive}
-                  onCommit={commitLevel}
-                />
-              </div>
-            ))}
-          </div>
+      <div className="rack-scroll -mx-1 overflow-x-auto px-1 pb-2">
+        <div
+          role="list"
+          aria-label="Canales de entrada"
+          className="grid grid-flow-col auto-cols-[minmax(100px,132px)] justify-start gap-2"
+        >
+          {visibleInputs.map((channel) => (
+            <div
+              role="listitem"
+              // Al cambiar el candado se remonta la tira: se descarta
+              // cualquier borrador de arrastre y se parte del nivel real.
+              key={`${channel.index}:${interactive ? 'live' : 'locked'}`}
+              className="min-w-0"
+            >
+              <MeteredChannelStrip
+                channel={channel}
+                interactive={interactive}
+                onCommit={commitLevel}
+              />
+            </div>
+          ))}
         </div>
-      )}
+      </div>
     </div>
   )
 }

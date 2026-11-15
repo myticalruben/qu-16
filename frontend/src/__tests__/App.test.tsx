@@ -49,4 +49,14 @@ describe('App', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('−∞')).toBeInTheDocument()
   })
+
+  it('muestra el selector de canales en la cabecera', () => {
+    useMixerStore.getState().applyState(SNAPSHOT)
+
+    render(<App />)
+
+    expect(
+      screen.getByRole('button', { name: 'Canales: 16/16' }),
+    ).toBeInTheDocument()
+  })
 })

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import { ChannelRack } from './components/ChannelRack'
+import { ChannelMenu } from './components/ChannelMenu'
 import { ConnectionBadge } from './components/ConnectionBadge'
 import { ControlLock } from './components/ControlLock'
 import { WriteErrorNotice } from './components/WriteErrorNotice'
@@ -145,7 +146,7 @@ function App() {
             </div>
           </div>
 
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {hardwareLabel !== '' ? (
               <span
                 className="max-w-[170px] truncate font-mono text-[9px] tracking-[0.14em] text-console-faint"
@@ -155,6 +156,7 @@ function App() {
               </span>
             ) : null}
             <ControlLock />
+            <ChannelMenu />
             <ConnectionBadge
               state={connectionState}
               serverVersion={serverVersion}

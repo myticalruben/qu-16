@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ChannelRack } from '../ChannelRack'
@@ -156,21 +156,24 @@ describe('fader interactivo', () => {
 
     // Optimista: primero se mueve, luego la API lo rechaza.
     expect(levelOf(1)).toBe(-12)
-    expect(screen.getByText('−12.0')).toBeInTheDocument()
+    expect(
+      within(screen.getByLabelText('Canal 1: coro1')).getByText('−12.0'),
+    ).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(/bloqueada/i)
     })
     expect(levelOf(1)).toBe(4.9)
-    expect(screen.getByText('+4.9')).toBeInTheDocument()
+    expect(
+      within(screen.getByLabelText('Canal 1: coro1')).getByText('+4.9'),
+    ).toBeInTheDocument()
   })
 
   it('no permite arrastrar canales sin nombre ni con la mesa desconectada', () => {
     enableControl()
     render(<ChannelRack />)
 
-    // Los canales sin nombre solo aparecen con «Mostrar todos».
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Mostrar todos' }))
+    // Los canales sin nombre se pintan por defecto, pero su fader no se mueve.
     expect(screen.getByRole('slider', { name: 'Fader de canal 2' })).toBeDisabled()
 
     act(() => {

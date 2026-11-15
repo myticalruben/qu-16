@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { ChannelRack } from '../ChannelRack'
 import type { MixerStatePayload } from '../../store/mixer'
-import { useMixerStore } from '../../store/mixer'
+import {
+  DEFAULT_VISIBLE_CHANNELS,
+  useMixerStore,
+} from '../../store/mixer'
 
 const SNAPSHOT: MixerStatePayload = {
   connected: true,
@@ -18,24 +21,78 @@ const SNAPSHOT: MixerStatePayload = {
   ],
 }
 
+/** Volcado realista: 16 entradas físicas y 44 mezclas/FX/destinos. */
+const FULL_SNAPSHOT: MixerStatePayload = {
+  ...SNAPSHOT,
+  channels: Array.from({ length: 60 }, (_, index) => ({
+    index,
+    name: index < 16 ? `canal ${index + 1}` : `mezcla ${index + 1}`,
+    level_db: -6,
+    kind: index < 16 ? ('input' as const) : ('other' as const),
+  })),
+}
+
 describe('ChannelRack', () => {
   beforeEach(() => {
+    localStorage.clear()
     useMixerStore.getState().reset()
+    useMixerStore.getState().setVisibleChannels(DEFAULT_VISIBLE_CHANNELS)
     useMixerStore.getState().applyState(SNAPSHOT)
   })
 
-  it('pinta solo los canales con nombre por defecto', () => {
+  it('pinta todos los canales de entrada recibidos, tengan nombre o no', () => {
     render(<ChannelRack />)
 
-    const items = screen.getAllByRole('listitem')
-    expect(items).toHaveLength(2)
+    expect(screen.getAllByRole('listitem')).toHaveLength(4)
     expect(
       screen.getByRole('heading', { level: 3, name: 'coro1' }),
     ).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { level: 3, name: 'coro2' }),
     ).toBeInTheDocument()
+
+    const unnamed = screen.getByLabelText('Canal 2: sin nombre')
+    expect(unnamed).toHaveAttribute('data-unnamed', 'true')
+    expect(within(unnamed).getByText('−∞')).toBeInTheDocument()
+    expect(within(unnamed).getByText('OT')).toBeInTheDocument()
+  })
+
+  it('con 60 canales en el payload pinta como máximo los 16 de entrada', () => {
+    useMixerStore.getState().applyState(FULL_SNAPSHOT)
+
+    render(<ChannelRack />)
+
+    const strips = screen.getAllByRole('listitem')
+    expect(strips).toHaveLength(16)
+    expect(screen.getByLabelText('Canal 0: canal 1')).toBeInTheDocument()
+    // El índice 15 es el canal 16 de la mesa; los índices >= 16 no se pintan.
+    expect(screen.getByLabelText('Canal 15: canal 16')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Canal 16: mezcla 17')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Canal 59: mezcla 60')).not.toBeInTheDocument()
+  })
+
+  it('solo pinta los canales marcados en la selección', () => {
+    useMixerStore.getState().setVisibleChannels([1, 4])
+
+    render(<ChannelRack />)
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByLabelText('Canal 1: coro1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Canal 4: coro2')).toBeInTheDocument()
     expect(screen.queryByLabelText('Canal 2: sin nombre')).not.toBeInTheDocument()
+    expect(screen.getByText('2 en pantalla')).toBeInTheDocument()
+  })
+
+  it('muestra el aviso y ningún canal si la selección está vacía', () => {
+    useMixerStore.getState().setVisibleChannels([])
+
+    render(<ChannelRack />)
+
+    expect(screen.getByText('Ningún canal seleccionado')).toBeInTheDocument()
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar los 16' }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(4)
   })
 
   it('conecta cada medidor con el índice de canal del store', () => {
@@ -56,28 +113,6 @@ describe('ChannelRack', () => {
     expect(
       coro2Meter.querySelector('.meter-bar__fill'),
     ).toHaveStyle({ height: '95%' })
-  })
-
-  it('pinta todos los canales al activar el control y atenúa los vacíos', () => {
-    render(<ChannelRack />)
-
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Mostrar todos' }))
-
-    expect(screen.getAllByRole('listitem')).toHaveLength(4)
-
-    const unnamedEmpty = screen.getByLabelText('Canal 2: sin nombre')
-    expect(unnamedEmpty).toHaveAttribute('data-unnamed', 'true')
-    expect(unnamedEmpty.className).toContain('opacity-60')
-    expect(within(unnamedEmpty).getByText('−∞')).toBeInTheDocument()
-    expect(within(unnamedEmpty).getByText('OT')).toBeInTheDocument()
-
-    const unnamedBlank = screen.getByLabelText('Canal 3: sin nombre')
-    expect(within(unnamedBlank).getByText('ST')).toBeInTheDocument()
-
-    // Los canales con nombre no se atenúan.
-    expect(screen.getByLabelText('Canal 1: coro1')).not.toHaveAttribute(
-      'data-unnamed',
-    )
   })
 
   it('muestra el estado vacío si aún no hay volcado', () => {
