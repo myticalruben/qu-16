@@ -1,5 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
+import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react'
+
 import type { ChannelKind } from '../store/mixer'
-import { FADER_MAX_DB, FADER_MIN_DB } from '../store/mixer'
+import { FADER_MAX_DB, FADER_MIN_DB, useMixerStore } from '../store/mixer'
 import { MeterBar } from './MeterBar'
 
 interface ChannelStripProps {
@@ -10,10 +13,23 @@ interface ChannelStripProps {
   kind: ChannelKind
   /** Nivel instantáneo del medidor en dB; `null` equivale a silencio. */
   meterDb: number | null
+  /** `true` solo con el candado abierto y la mesa conectada. */
+  interactive: boolean
+  /** Envía el nivel elegido; se llama al soltar o al teclear. */
+  onCommit: (index: number, db: number) => void
 }
 
 /** Marcas de referencia del fader; el recorrido es lineal en dB. */
 const FADER_TICKS = [10, 0, -12, -30, -48]
+
+/**
+ * Freno del fader. Durante los primeros 400 ms de arrastre no se envía nada:
+ * el operador está buscando el punto. A partir de ahí se manda como máximo una
+ * vez cada 200 ms para que oiga el cambio en vivo, y al soltar se manda el
+ * valor final. Así un arrastre de un segundo no genera decenas de POST.
+ */
+const DRAG_SEND_DELAY_MS = 400
+const DRAG_SEND_INTERVAL_MS = 200
 
 const KIND_LABELS: Record<ChannelKind, string> = {
   input: 'IN',
@@ -55,15 +71,112 @@ export function ChannelStrip({
   faderDb,
   kind,
   meterDb,
+  interactive,
+  onCommit,
 }: ChannelStripProps) {
   const unnamed = name.trim() === ''
+  const canDrag = interactive && !unnamed
   const displayName = unnamed ? '—' : name
   const channelNumber = String(index).padStart(2, '0')
   const accent = kind === 'stereo' ? 'amber' : 'cyan'
-  const faderPositionDb = faderPosition(faderDb)
   const accessibleName = unnamed ? `canal ${index}` : name
   const kindLabel = KIND_LABELS[kind]
   const kindName = KIND_NAMES[kind]
+
+  // Valor optimista mientras se arrastra: la tira sigue al dedo aunque el
+  // volcado del WebSocket llegue con el nivel viejo.
+  const [draftDb, setDraftDb] = useState<number | null>(null)
+  const dragRef = useRef<{ startedAt: number; lastSentAt: number } | null>(null)
+  const movedRef = useRef(false)
+  const beginChannelDrag = useMixerStore((state) => state.beginChannelDrag)
+  const endChannelDrag = useMixerStore((state) => state.endChannelDrag)
+
+  const displayedDb = draftDb ?? faderDb
+  const faderPositionDb = faderPosition(displayedDb)
+
+  // El rack remonta la tira cuando cambia el candado (ver `key`), así que un
+  // cierre a mitad de gesto no deja estados locales colgados. Al desmontar se
+  // libera el canal para que el WebSocket vuelva a actualizarlo.
+  useEffect(
+    () => () => {
+      if (dragRef.current !== null) endChannelDrag(index)
+    },
+    [index, endChannelDrag],
+  )
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (!canDrag) return
+    // Solo el botón primario del ratón; el táctil y el lápiz siempre valen.
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+
+    dragRef.current = { startedAt: performance.now(), lastSentAt: 0 }
+    movedRef.current = false
+    setDraftDb(faderPosition(faderDb))
+    beginChannelDrag(index)
+  }
+
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (!canDrag) return
+
+    const next = clamp(
+      Number.parseFloat(event.target.value),
+      FADER_MIN_DB,
+      FADER_MAX_DB,
+    )
+    if (!Number.isFinite(next)) return
+
+    const drag = dragRef.current
+
+    // Cambio sin puntero (flechas del teclado): se aplica al momento y no se
+    // retiene ningún borrador, para que el WebSocket siga mandando.
+    if (drag === null) {
+      onCommit(index, next)
+      return
+    }
+
+    setDraftDb(next)
+
+    movedRef.current = true
+    const now = performance.now()
+    if (now - drag.startedAt < DRAG_SEND_DELAY_MS) return
+    if (now - drag.lastSentAt < DRAG_SEND_INTERVAL_MS) return
+
+    drag.lastSentAt = now
+    onCommit(index, next)
+  }
+
+  const finishDrag = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (dragRef.current === null) return
+
+    const next = clamp(
+      Number.parseFloat(event.currentTarget.value),
+      FADER_MIN_DB,
+      FADER_MAX_DB,
+    )
+    const moved = movedRef.current
+    dragRef.current = null
+    movedRef.current = false
+    setDraftDb(null)
+    endChannelDrag(index)
+
+    // Al soltar manda siempre el valor final, aunque el throttle ya hubiera
+    // enviado uno intermedio: así la mesa queda exactamente donde se soltó.
+    if (moved && Number.isFinite(next)) onCommit(index, next)
+  }
+
+  const cancelDrag = () => {
+    if (dragRef.current === null) return
+    dragRef.current = null
+    movedRef.current = false
+    setDraftDb(null)
+    endChannelDrag(index)
+  }
+
+  const faderTitle = canDrag
+    ? 'Arrastra para cambiar el nivel'
+    : unnamed
+      ? 'Canal sin nombre: fader no disponible'
+      : 'Fader de solo lectura: activa el control para moverlo'
 
   return (
     <article
@@ -102,7 +215,7 @@ export function ChannelStrip({
         aria-live="off"
       >
         <span className="sr-only">Ganancia: </span>
-        {formatDb(faderDb)}
+        {formatDb(displayedDb)}
         <span className="ml-1 text-[8px] tracking-[0.08em] text-console-faint">
           dB
         </span>
@@ -140,10 +253,14 @@ export function ChannelStrip({
             max={FADER_MAX_DB}
             step={0.5}
             value={faderPositionDb}
-            disabled
-            title="Fader de solo lectura: los comandos llegan en la Fase 3"
+            disabled={!canDrag}
+            title={faderTitle}
             aria-label={`Fader de ${accessibleName}`}
-            aria-valuetext={ariaDb(faderDb)}
+            aria-valuetext={ariaDb(displayedDb)}
+            onPointerDown={handlePointerDown}
+            onChange={handleChange}
+            onPointerUp={finishDrag}
+            onPointerCancel={cancelDrag}
             className="fader-range absolute left-1/2 top-1/2 h-8 w-44 -translate-x-1/2 -translate-y-1/2 -rotate-90 disabled:cursor-not-allowed"
           />
         </div>

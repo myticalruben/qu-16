@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+import type { MixerConfigResponse } from '../lib/api'
+
 /** Los tres estados visibles del enlace con el backend. */
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected'
 
@@ -108,9 +110,35 @@ export interface MixerState extends MixerSnapshot {
    * No forma parte del volcado `state`: se refresca con cada mensaje `meters`.
    */
   levels: (number | null)[]
+  /**
+   * Candado de escritura. Arranca apagado y no se persiste: cada recarga
+   * obliga a confirmar otra vez que se va a mover la mesa real.
+   */
+  controlEnabled: boolean
+  /** `true` mientras el diálogo de confirmación está abierto. */
+  controlPending: boolean
+  /** Permiso publicado por `GET /api/mixer/config`; `null` = aún sin leer. */
+  writeConfig: MixerConfigResponse | null
+  /** Último fallo de escritura, para el aviso efímero. */
+  lastError: string | null
+  /** Canales que se están arrastrando: el WS no debe pisar su nivel. */
+  draggingChannels: number[]
   setConnectionState: (state: ConnectionState) => void
   setLinkActive: (active: boolean) => void
   setServerVersion: (version: string | null) => void
+  /** Guarda el permiso del backend; si viene denegado, cierra el candado. */
+  setWriteConfig: (config: MixerConfigResponse | null) => void
+  /** Abre o cierra el candado. Nunca se abre sin permiso del servidor. */
+  setControlEnabled: (enabled: boolean) => void
+  setControlPending: (pending: boolean) => void
+  /** Registra el aviso de error; el componente lo descarta a los 4 s. */
+  setLastError: (message: string | null) => void
+  clearError: () => void
+  /** Marca/desmarca un canal en arrastre para aislarlo del WS. */
+  beginChannelDrag: (index: number) => void
+  endChannelDrag: (index: number) => void
+  /** Aplica el nivel optimista del fader sin esperar al backend. */
+  setChannelLevelDb: (index: number, levelDb: number | null) => void
   /** Aplica un mensaje `state`: normaliza snake_case, ordena y guarda. */
   applyState: (payload: MixerStatePayload) => void
   /**
@@ -130,6 +158,11 @@ export const useMixerStore = create<MixerState>()((set, get) => ({
   linkActive: false,
   serverVersion: null,
   levels: [],
+  controlEnabled: false,
+  controlPending: false,
+  writeConfig: null,
+  lastError: null,
+  draggingChannels: [],
 
   setConnectionState: (connectionState) => set({ connectionState }),
 
@@ -137,16 +170,81 @@ export const useMixerStore = create<MixerState>()((set, get) => ({
 
   setServerVersion: (serverVersion) => set({ serverVersion }),
 
-  applyState: (payload) =>
+  setWriteConfig: (writeConfig) =>
+    set((state) => ({
+      writeConfig,
+      // Si el servidor retira el permiso, el candado se cierra de inmediato.
+      controlEnabled:
+        writeConfig?.write_enabled === true ? state.controlEnabled : false,
+      controlPending:
+        writeConfig?.write_enabled === true ? state.controlPending : false,
+    })),
+
+  setControlEnabled: (enabled) =>
+    set((state) => ({
+      controlEnabled: enabled && state.writeConfig?.write_enabled === true,
+      controlPending: false,
+    })),
+
+  setControlPending: (controlPending) => set({ controlPending }),
+
+  setLastError: (lastError) => set({ lastError }),
+
+  clearError: () => set({ lastError: null }),
+
+  beginChannelDrag: (index) =>
+    set((state) =>
+      state.draggingChannels.includes(index)
+        ? state
+        : { draggingChannels: [...state.draggingChannels, index] },
+    ),
+
+  endChannelDrag: (index) =>
+    set((state) => ({
+      draggingChannels: state.draggingChannels.filter(
+        (dragged) => dragged !== index,
+      ),
+    })),
+
+  setChannelLevelDb: (index, levelDb) => {
+    const current = get().channels
+    const target = current.find((channel) => channel.index === index)
+    if (target === undefined || target.levelDb === levelDb) return
+
+    set({
+      channels: current.map((channel) =>
+        channel.index === index ? { ...channel, levelDb } : channel,
+      ),
+    })
+  },
+
+  applyState: (payload) => {
+    const dragging = get().draggingChannels
+    const previous = get().channels
+    const nextChannels = (Array.isArray(payload?.channels) ? payload.channels : [])
+      .map(normalizeChannel)
+      .sort((a, b) => a.index - b.index)
+
+    // Mientras el operador arrastra, el sondeo del backend puede devolver el
+    // nivel anterior. Se conserva la tira que el usuario tiene en la mano para
+    // que el fader no salte bajo el dedo; el resto del volcado sí se aplica.
+    const guardedChannels =
+      dragging.length === 0
+        ? nextChannels
+        : nextChannels.map((channel) => {
+            if (!dragging.includes(channel.index)) return channel
+            const current = previous.find((item) => item.index === channel.index)
+            return current ?? channel
+          })
+
     set({
       connected: payload?.connected === true,
       model: normalizeText(payload?.model) || null,
       firmware: normalizeText(payload?.firmware) || null,
       updatedAt: normalizeText(payload?.updated_at) || null,
-      channels: (Array.isArray(payload?.channels) ? payload.channels : [])
-        .map(normalizeChannel)
-        .sort((a, b) => a.index - b.index),
-    }),
+      channels: guardedChannels,
+    })
+  },
 
   applyMeters: (levels) => {
     const next = normalizeLevels(levels)
@@ -164,6 +262,11 @@ export const useMixerStore = create<MixerState>()((set, get) => ({
       connectionState: 'disconnected',
       linkActive: false,
       serverVersion: null,
+      controlEnabled: false,
+      controlPending: false,
+      writeConfig: null,
+      lastError: null,
+      draggingChannels: [],
     }),
 }))
 

@@ -1,8 +1,20 @@
-import { memo, useState } from 'react'
+import { memo, useCallback, useState } from 'react'
 
+import { ApiError, writeChannelLevel } from '../lib/api'
 import type { Channel } from '../store/mixer'
 import { levelFor, namedChannels, useMixerStore } from '../store/mixer'
 import { ChannelStrip } from './ChannelStrip'
+
+/** Traduce el fallo HTTP a un aviso corto, sin jerga ni detalles internos. */
+function describeWriteError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 409) return 'La mesa rechazó el cambio: escritura bloqueada.'
+    if (error.status === 404) return 'Ese canal ya no existe en la mesa.'
+    if (error.status === 422) return 'La mesa rechazó el valor enviado.'
+    return `No se pudo escribir en la mesa (HTTP ${error.status}).`
+  }
+  return 'No se pudo contactar con el servidor; el nivel se ha revertido.'
+}
 
 /**
  * Cada tira se suscribe a su propia posición de `levels`, no al array entero.
@@ -13,8 +25,12 @@ import { ChannelStrip } from './ChannelStrip'
  */
 const MeteredChannelStrip = memo(function MeteredChannelStrip({
   channel,
+  interactive,
+  onCommit,
 }: {
   channel: Channel
+  interactive: boolean
+  onCommit: (index: number, db: number) => void
 }) {
   const meterDb = useMixerStore((state) => levelFor(state, channel.index))
 
@@ -25,6 +41,8 @@ const MeteredChannelStrip = memo(function MeteredChannelStrip({
       faderDb={channel.levelDb}
       kind={channel.kind}
       meterDb={meterDb}
+      interactive={interactive}
+      onCommit={onCommit}
     />
   )
 })
@@ -85,7 +103,34 @@ function EmptyRack() {
 export function ChannelRack() {
   const channels = useMixerStore((state) => state.channels)
   const namedCount = useMixerStore((state) => namedChannels(state).length)
+  const controlEnabled = useMixerStore((state) => state.controlEnabled)
+  const connected = useMixerStore((state) => state.connected)
   const [showAll, setShowAll] = useState(false)
+
+  // Sin candado o sin mesa no se escribe. La tira decide además si el canal
+  // tiene nombre; los vacíos siguen visibles pero nunca arrastrables.
+  const interactive = controlEnabled && connected
+
+  /**
+   * Escritura optimista: el fader ya se movió en la UI, se manda el nivel y,
+   * si el backend lo rechaza, se recupera el valor anterior y se avisa. El
+   * candado y la conexión ya se comprobaron antes de llegar aquí.
+   */
+  const commitLevel = useCallback(async (index: number, db: number) => {
+    const store = useMixerStore.getState()
+    const previous =
+      store.channels.find((channel) => channel.index === index)?.levelDb ?? null
+
+    store.setChannelLevelDb(index, db)
+
+    try {
+      const result = await writeChannelLevel(index, db)
+      if (result.db !== null) store.setChannelLevelDb(index, result.db)
+    } catch (error) {
+      store.setChannelLevelDb(index, previous)
+      store.setLastError(describeWriteError(error))
+    }
+  }, [])
 
   if (channels.length === 0) {
     return <EmptyRack />
@@ -108,15 +153,28 @@ export function ChannelRack() {
           </span>
         </p>
 
-        <label className="inline-flex cursor-pointer select-none items-center gap-2 font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint transition-colors duration-150 hover:text-console-muted">
-          <input
-            type="checkbox"
-            checked={showAll}
-            onChange={(event) => setShowAll(event.target.checked)}
-            className="h-3.5 w-3.5 cursor-pointer rounded-sm border border-console-line-strong bg-console-void accent-[#22d3ee]"
-          />
-          Mostrar todos
-        </label>
+        <div className="flex items-center gap-3">
+          {/* Con el candado apagado se avisa junto a los faders; cuando está
+              activo, la cabecera ya muestra el estado y no se duplica. */}
+          {controlEnabled ? null : (
+            <span
+              aria-live="polite"
+              className="rounded border border-console-line bg-console-panel/60 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint"
+            >
+              solo lectura
+            </span>
+          )}
+
+          <label className="inline-flex cursor-pointer select-none items-center gap-2 font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint transition-colors duration-150 hover:text-console-muted">
+            <input
+              type="checkbox"
+              checked={showAll}
+              onChange={(event) => setShowAll(event.target.checked)}
+              className="h-3.5 w-3.5 cursor-pointer rounded-sm border border-console-line-strong bg-console-void accent-[#22d3ee]"
+            />
+            Mostrar todos
+          </label>
+        </div>
       </div>
 
       {visibleChannels.length === 0 ? (
@@ -129,8 +187,18 @@ export function ChannelRack() {
             className="grid grid-flow-col auto-cols-[minmax(100px,132px)] justify-start gap-2"
           >
             {visibleChannels.map((channel) => (
-              <div role="listitem" key={channel.index} className="min-w-0">
-                <MeteredChannelStrip channel={channel} />
+              <div
+                role="listitem"
+                // Al cambiar el candado se remonta la tira: se descarta
+                // cualquier borrador de arrastre y se parte del nivel real.
+                key={`${channel.index}:${interactive ? 'live' : 'locked'}`}
+                className="min-w-0"
+              >
+                <MeteredChannelStrip
+                  channel={channel}
+                  interactive={interactive}
+                  onCommit={commitLevel}
+                />
               </div>
             ))}
           </div>

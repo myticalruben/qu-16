@@ -1,5 +1,10 @@
+import { useEffect } from 'react'
+
 import { ChannelRack } from './components/ChannelRack'
 import { ConnectionBadge } from './components/ConnectionBadge'
+import { ControlLock } from './components/ControlLock'
+import { WriteErrorNotice } from './components/WriteErrorNotice'
+import { getMixerConfig } from './lib/api'
 import { connectMixerSocket, disconnectMixerSocket } from './lib/ws'
 import { channelCount, namedChannels, useMixerStore } from './store/mixer'
 
@@ -87,6 +92,21 @@ function App() {
   const updatedAt = useMixerStore((state) => state.updatedAt)
   const totalChannels = useMixerStore(channelCount)
   const namedCount = useMixerStore((state) => namedChannels(state).length)
+  const controlEnabled = useMixerStore((state) => state.controlEnabled)
+
+  // El permiso de escritura se pregunta al backend al abrir la consola. Si la
+  // petición falla, el candado se queda apagado: nunca se asume permiso.
+  useEffect(() => {
+    const controller = new AbortController()
+
+    getMixerConfig(controller.signal)
+      .then((config) => useMixerStore.getState().setWriteConfig(config))
+      .catch(() => {
+        // Sin respuesta no se habilita nada; el estado sigue «sin confirmar».
+      })
+
+    return () => controller.abort()
+  }, [])
 
   // El botón sigue al socket; la insignia sigue a la mesa. No son lo mismo:
   // el backend puede estar en línea con la Qu-16 apagada.
@@ -134,6 +154,7 @@ function App() {
                 {hardwareLabel}
               </span>
             ) : null}
+            <ControlLock />
             <ConnectionBadge
               state={connectionState}
               serverVersion={serverVersion}
@@ -149,6 +170,8 @@ function App() {
           </div>
         </div>
       </header>
+
+      <WriteErrorNotice />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <section aria-labelledby="channel-rack-title">
@@ -191,7 +214,9 @@ function App() {
                 aria-hidden="true"
                 className="h-1.5 w-1.5 rounded-full bg-accent-amber/80 shadow-[0_0_6px_rgba(245,165,36,0.45)]"
               />
-              Fase 2 · canales reales por WebSocket · faders de solo lectura
+              {controlEnabled
+                ? 'Fase 3 · control activo · los faders escriben en la mesa'
+                : 'Fase 3 · canales reales · faders de solo lectura'}
             </p>
             <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-console-faint">
               {updatedAt !== null ? (
@@ -217,7 +242,7 @@ function App() {
           </p>
           <p className="flex flex-wrap items-center gap-2">
             <span className="h-1 w-1 rounded-full bg-accent-cyan/70" aria-hidden="true" />
-            <span>Fase 2 · datos de la mesa</span>
+            <span>Fase 3 · control con candado</span>
             <span aria-hidden="true" className="text-console-line-strong">
               /
             </span>

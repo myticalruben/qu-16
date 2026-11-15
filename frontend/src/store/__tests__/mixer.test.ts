@@ -37,6 +37,11 @@ describe('mixer store', () => {
     expect(state.updatedAt).toBeNull()
     expect(state.channels).toEqual([])
     expect(state.levels).toEqual([])
+    expect(state.controlEnabled).toBe(false)
+    expect(state.controlPending).toBe(false)
+    expect(state.writeConfig).toBeNull()
+    expect(state.lastError).toBeNull()
+    expect(state.draggingChannels).toEqual([])
   })
 
   it('actualiza el estado de conexión del socket', () => {
@@ -150,12 +155,71 @@ describe('mixer store', () => {
     ])
   })
 
+  it('solo abre el candado con permiso del servidor y lo cierra si se retira', () => {
+    const store = useMixerStore.getState()
+
+    // Sin configuración no hay permiso: el candado no se abre.
+    store.setControlEnabled(true)
+    expect(useMixerStore.getState().controlEnabled).toBe(false)
+
+    store.setWriteConfig({
+      write_enabled: true,
+      model: 'QU-16',
+      connected: true,
+    })
+    store.setControlEnabled(true)
+    expect(useMixerStore.getState().controlEnabled).toBe(true)
+
+    // El backend retira el permiso: se cierra de inmediato.
+    store.setWriteConfig({
+      write_enabled: false,
+      model: 'QU-16',
+      connected: true,
+    })
+    expect(useMixerStore.getState().controlEnabled).toBe(false)
+  })
+
+  it('mantiene el nivel optimista del canal en arrastre aunque llegue un state', () => {
+    const store = useMixerStore.getState()
+    store.applyState(SNAPSHOT)
+    store.setChannelLevelDb(1, -6)
+    store.beginChannelDrag(1)
+
+    store.applyState({
+      ...SNAPSHOT,
+      channels: [
+        { index: 1, name: 'coro1', level_db: 4.9, kind: 'input' },
+        { index: 2, name: '', level_db: -12, kind: 'stereo' },
+      ],
+    })
+
+    expect(
+      useMixerStore.getState().channels.find((channel) => channel.index === 1)
+        ?.levelDb,
+    ).toBe(-6)
+
+    // Al soltar, el volcado vuelve a mandar.
+    store.endChannelDrag(1)
+    store.applyState(SNAPSHOT)
+    expect(
+      useMixerStore.getState().channels.find((channel) => channel.index === 1)
+        ?.levelDb,
+    ).toBe(4.9)
+  })
+
   it('reset vuelve al estado vacío inicial', () => {
     useMixerStore.getState().applyState(SNAPSHOT)
     useMixerStore.getState().setConnectionState('connected')
     useMixerStore.getState().setLinkActive(true)
     useMixerStore.getState().setServerVersion('0.1.0')
     useMixerStore.getState().applyMeters([-12, null])
+    useMixerStore
+      .getState()
+      .setWriteConfig({ write_enabled: true, model: 'QU-16', connected: true })
+    useMixerStore.getState().setControlEnabled(true)
+    useMixerStore.getState().setControlPending(true)
+    useMixerStore.getState().setLastError('fallo')
+    useMixerStore.getState().beginChannelDrag(1)
 
     useMixerStore.getState().reset()
 
@@ -166,5 +230,10 @@ describe('mixer store', () => {
     expect(state.channels).toEqual([])
     expect(state.levels).toEqual([])
     expect(state.connected).toBe(false)
+    expect(state.controlEnabled).toBe(false)
+    expect(state.controlPending).toBe(false)
+    expect(state.writeConfig).toBeNull()
+    expect(state.lastError).toBeNull()
+    expect(state.draggingChannels).toEqual([])
   })
 })
