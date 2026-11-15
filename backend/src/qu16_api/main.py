@@ -3,7 +3,9 @@
 La API sirve el estado del espejo en memoria y lo empuja por WebSocket, junto
 con los niveles de medidor (a un ritmo limitado por ``QU16_METERS_RATE_HZ``).
 La conexión con la mesa solo se abre si ``QU16_AUTO_CONNECT`` está activo; con
-el valor por defecto (``false``) el proceso no abre ningún socket.
+el valor por defecto (``false``) el proceso no abre ningún socket. Las
+escrituras de nivel van por REST y solo se permiten con
+``QU16_WRITE_ENABLED=true``.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from qu16.link import MixerLink
 
 from . import __version__
 from .config import get_settings
-from .routers import health
+from .routers import channels, health
 from .state import state_meters, state_mirror
 from .ws import StateHub
 
@@ -90,6 +92,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             reconnect_min=settings.reconnect_min,
             reconnect_max=settings.reconnect_max,
             keepalive_interval=settings.keepalive_interval,
+            poll_interval=settings.poll_interval,
+            write_enabled=settings.write_enabled,
         )
         link.start()
         logger.info(
@@ -121,7 +125,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     Al conectar envía el saludo con la versión y la instantánea actual, y a
     partir de ahí el :class:`StateHub` le empuja cada cambio de estado. Los
-    mensajes entrantes se descartan a propósito (Fase 2 es de solo lectura).
+    mensajes entrantes se descartan a propósito: el WebSocket sigue siendo de
+    solo lectura y las escrituras van por REST.
     """
     await websocket.accept()
     await websocket.send_json(
@@ -161,6 +166,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health.router)
+    app.include_router(channels.router)
     app.add_api_websocket_route("/ws", websocket_endpoint)
 
     dist = frontend_dist()

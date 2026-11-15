@@ -1,4 +1,4 @@
-"""Enlace de solo lectura con la mesa Qu-16.
+"""Enlace con la mesa Qu-16.
 
 Gestiona el ciclo de vida de la conexión TCP: handshake, volcado de estado,
 keepalive y reconexión exponencial con jitter. Todo ocurre en una tarea de
@@ -7,9 +7,15 @@ también escucha los medidores por UDP en el puerto anunciado y actualiza un
 :class:`~qu16.meters.MeterState` compartido; si ese socket no se puede abrir,
 el enlace de control sigue funcionando sin medidores.
 
-La Fase 2 es estrictamente de lectura: el enlace puede hacer handshake, pedir
-el volcado y mandar el latido, pero nunca comandos DSP (``DspCommand``,
-marcador ``0xF7``). Ver :data:`WRITE_ENABLED`.
+La mesa puede dejar de enviar avisos de cambio DSP aunque siga respondiendo al
+volcado. Por eso, si ``poll_interval`` es positivo, un bucle de fondo pide un
+volcado periódico y refresca el espejo; sin ese sondeo la interfaz se quedaría
+congelada tras una escritura.
+
+Las escrituras DSP (``DspCommand``, marcador ``0xF7``) están protegidas por dos
+interruptores: :data:`WRITE_ENABLED`, permiso de la capa de protocolo, y
+``write_enabled`` de cada enlace. El interruptor real y por defecto es
+``QU16_WRITE_ENABLED`` de la API (apagado).
 """
 
 from __future__ import annotations
@@ -31,10 +37,12 @@ from .protocol.framing import DspCommand, SystemPacket
 
 logger = logging.getLogger(__name__)
 
-#: Interruptor global de escritura. Además de esto, cada enlace debe crearse con
-#: ``write_enabled=True``. Con cualquiera de los dos en ``False`` el enlace
-#: rechaza cualquier ``DspCommand`` antes de llegar al socket.
-WRITE_ENABLED = False
+#: Permiso de la capa de protocolo para enviar comandos DSP. El interruptor
+#: real y por defecto es ``QU16_WRITE_ENABLED`` (apagado): la API lo lee y lo
+#: pasa como ``write_enabled`` al crear el enlace. Además, cada enlace debe
+#: crearse con ``write_enabled=True``. Con cualquiera de los dos en ``False`` el
+#: enlace rechaza cualquier ``DspCommand`` antes de llegar al socket.
+WRITE_ENABLED = True
 
 #: Latido que espera la mesa para no dar la sesión por perdida. No es un
 #: comando DSP: es una trama de sistema del grupo CONTROL.
@@ -162,6 +170,7 @@ class MixerLink:
         reconnect_min: float = 1.0,
         reconnect_max: float = 30.0,
         keepalive_interval: float = 0.5,
+        poll_interval: float = 2.0,
         timeout: float = 6.0,
         jitter: float = 0.1,
     ) -> None:
@@ -170,6 +179,8 @@ class MixerLink:
             raise ValueError("rango de reconexión inválido")
         if keepalive_interval <= 0:
             raise ValueError("keepalive_interval debe ser positivo")
+        if poll_interval < 0:
+            raise ValueError("poll_interval no puede ser negativo")
         if not 0 <= meters_port <= 65535:
             raise ValueError("meters_port fuera de rango")
 
@@ -182,6 +193,7 @@ class MixerLink:
         self.reconnect_min = reconnect_min
         self.reconnect_max = reconnect_max
         self.keepalive_interval = keepalive_interval
+        self.poll_interval = poll_interval
         self.timeout = timeout
         self.jitter = jitter
 
@@ -215,6 +227,12 @@ class MixerLink:
     def running(self) -> bool:
         """``True`` mientras la tarea de fondo siga viva."""
         return self._task is not None and not self._task.done()
+
+    @property
+    def connected(self) -> bool:
+        """``True`` si hay una sesión TCP viva con la mesa."""
+        client = self._client
+        return client is not None and client.connected
 
     @property
     def meters_open(self) -> bool:
@@ -267,7 +285,14 @@ class MixerLink:
                 # Sesión sana: el siguiente corte vuelve a reintentar en el
                 # mínimo, no en el máximo acumulado.
                 delay = self.reconnect_min
-                await self._keepalive(client)
+                # El sondeo convive con el latido: cada uno en su tarea. El
+                # finally cancela el sondeo también si el latido falla o si
+                # ``stop()`` cancela el bucle de conexión.
+                poll_task = self._start_polling(client)
+                try:
+                    await self._keepalive(client)
+                finally:
+                    await self._stop_polling(poll_task)
                 logger.warning("enlace: la mesa cerró la conexión")
             except asyncio.CancelledError:
                 raise
@@ -325,6 +350,46 @@ class MixerLink:
 
     # ------------------------------------------------------------- sesión
 
+    def _start_polling(self, client: QuClient) -> asyncio.Task[None] | None:
+        """Lanza el sondeo periódico del estado si está configurado."""
+        if self.poll_interval <= 0:
+            return None
+        return asyncio.create_task(self._poll(client), name="qu16-poll")
+
+    async def _stop_polling(self, task: asyncio.Task[None] | None) -> None:
+        """Cancela y espera el sondeo; tolera que ya haya terminado."""
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _poll(self, client: QuClient) -> None:
+        """Pide un volcado cada ``poll_interval`` y refresca el espejo.
+
+        El bucle es estrictamente secuencial: espera el intervalo, espera a que
+        termine el volcado, actualiza el espejo y solo entonces vuelve a
+        esperar. Por eso un volcado más lento que el intervalo no se solapa con
+        el siguiente. Un error puntual se registra y el bucle continúa: el
+        sondeo no debe tumbar la sesión ni la reconexión.
+        """
+        while self.poll_interval > 0:
+            await asyncio.sleep(self.poll_interval)
+            if not client.connected:
+                return
+            try:
+                raw = await client.request_state_dump()
+                await self.mirror.update_from_dump(client.version, raw)
+                await self._publish()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - el bucle no debe morir
+                logger.warning(
+                    "enlace: fallo en el sondeo de estado: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+
     async def _keepalive(self, client: QuClient) -> None:
         """Manda el latido cada ``keepalive_interval`` segundos.
 
@@ -344,8 +409,10 @@ class MixerLink:
     async def _send(
         self, client: QuClient, packet: SystemPacket | DspCommand
     ) -> None:
-        """Único punto de salida hacia la mesa; bloquea comandos DSP en Fase 2."""
-        if isinstance(packet, DspCommand) and not (WRITE_ENABLED and self.write_enabled):
+        """Único punto de salida hacia la mesa; filtra los comandos DSP."""
+        if isinstance(packet, DspCommand) and not (
+            WRITE_ENABLED and self.write_enabled
+        ):
             raise WriteDisabledError(
                 "escritura deshabilitada: requiere WRITE_ENABLED y write_enabled"
             )
@@ -356,6 +423,10 @@ class MixerLink:
 
         Requiere que el enlace se haya creado con ``write_enabled=True``. El
         valor es el crudo de 16 bits de la misma escala que el volcado.
+
+        Tras enviar el comando aplica el valor al espejo y publica el estado,
+        para que la interfaz no espere al siguiente sondeo. No hay confirmación
+        por eco: si la mesa ajusta el valor, el sondeo lo corregirá.
         """
         if not self.write_enabled:
             raise WriteDisabledError(
@@ -364,7 +435,10 @@ class MixerLink:
         client = self._client
         if client is None or not client.connected:
             raise QuError("sin conexión con la mesa")
-        await self._send(client, dsp.main_level(channel, raw))
+        value = max(0, min(0xFFFF, raw))
+        await self._send(client, dsp.main_level(channel, value))
+        await self.mirror.apply_level(channel, value)
+        await self._publish()
 
     async def _publish(self) -> None:
         """Entrega la instantánea actual al callback, sin romper el bucle."""

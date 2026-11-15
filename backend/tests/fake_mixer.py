@@ -26,15 +26,19 @@ DEFAULT_VERSION_DATA = bytes.fromhex("01016101de11000000000000")
 DEFAULT_MIXER_UDP_PORT = 53441
 #: Datagramas reales de los dos bancos de medidores.
 METER_BANK_FILES = ("meter-bank-a.hex", "meter-bank-b.hex")
+#: Primera trama de la ráfaga de inicialización: dispara cada volcado. Se usa
+#: como marca para responder también a los volcados del sondeo periódico.
+DUMP_REQUEST_PREFIX = b"\x13\x00\x00\x00"
 
 
 class FakeMixer:
     """Servidor asyncio mínimo con el comportamiento observable de la mesa.
 
-    Implementa lo que necesita la Fase 2: handshake, volcado, conteo de
-    latidos y, opcionalmente, el envío periódico de medidores al puerto UDP que
-    el cliente anuncia. Los comandos DSP recibidos se cuentan en
-    :attr:`dsp_frames` para poder afirmar que el enlace no escribe.
+    Implementa lo que necesita el enlace: handshake, volcado (también repetido,
+    para el sondeo periódico), conteo de latidos y, opcionalmente, el envío
+    periódico de medidores al puerto UDP que el cliente anuncia. Los comandos
+    DSP recibidos se cuentan en :attr:`dsp_frames` y se guardan codificados en
+    :attr:`dsp_payloads` para poder comprobar que llegan y qué llevan.
     """
 
     def __init__(
@@ -47,6 +51,7 @@ class FakeMixer:
         mixer_udp_port: int = DEFAULT_MIXER_UDP_PORT,
         send_meters: bool = True,
         meter_interval: float = 0.02,
+        dump_delay: float = 0.0,
     ) -> None:
         self.host = host
         self.port = port
@@ -55,6 +60,8 @@ class FakeMixer:
         self.mixer_udp_port = mixer_udp_port
         self.send_meters = send_meters
         self.meter_interval = meter_interval
+        #: Latencia simulada antes de cada volcado (para probar el sondeo).
+        self.dump_delay = dump_delay
 
         data_dir = Path(__file__).parent / "data"
         self.meter_packets = tuple(
@@ -67,6 +74,8 @@ class FakeMixer:
         self.dumps_sent = 0
         self.keepalives = 0
         self.dsp_frames = 0
+        #: Bytes de cada comando DSP recibido, en orden de llegada.
+        self.dsp_payloads: list[bytes] = []
         #: Puerto UDP que anunció el cliente en el handshake.
         self.client_udp_port: int | None = None
         self.meter_packets_sent = 0
@@ -115,7 +124,6 @@ class FakeMixer:
         self._clients.add(writer)
         parser = FrameParser()
         handshaken = False
-        dump_sent = False
         meter_task: asyncio.Task[None] | None = None
         try:
             while True:
@@ -124,8 +132,9 @@ class FakeMixer:
                     break
                 for frame in parser.feed(chunk):
                     if not isinstance(frame, SystemPacket):
-                        # Cualquier 0xF7 es un comando DSP: no debe ocurrir.
+                        # Cualquier 0xF7 es un comando DSP.
                         self.dsp_frames += 1
+                        self.dsp_payloads.append(frame.encode())
                         continue
 
                     if frame.group == Group.UDP_PORT and not handshaken:
@@ -155,14 +164,10 @@ class FakeMixer:
                         )
                         handshaken = True
                     elif frame.group == Group.CONTROL:
-                        if len(frame.data) >= 4 and not dump_sent:
-                            # Ráfaga de init: responde con el volcado real.
-                            dump_sent = True
-                            self.dumps_sent += 1
-                            await self._write(
-                                writer,
-                                SystemPacket(Group.STATE_DUMP, self.dump),
-                            )
+                        if frame.data.startswith(DUMP_REQUEST_PREFIX):
+                            # Cada ráfaga de init pide un volcado; el sondeo
+                            # del enlace repite la misma ráfaga.
+                            await self._send_dump(writer)
                         elif frame.data == b"\x01\x00":
                             self.keepalives += 1
         except (ConnectionError, asyncio.CancelledError):
@@ -177,6 +182,13 @@ class FakeMixer:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+    async def _send_dump(self, writer: asyncio.StreamWriter) -> None:
+        """Responde con el volcado actual, tras la latencia configurada."""
+        self.dumps_sent += 1
+        if self.dump_delay > 0:
+            await asyncio.sleep(self.dump_delay)
+        await self._write(writer, SystemPacket(Group.STATE_DUMP, self.dump))
 
     async def _pump_meters(self) -> None:
         """Envía los bancos de medidores al puerto UDP que anunció el cliente.

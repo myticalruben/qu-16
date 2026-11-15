@@ -1,8 +1,9 @@
 """Espejo en memoria del estado de la mesa.
 
-La Fase 2 es de solo lectura: el espejo se construye a partir del volcado de
-estado que envía la mesa y nunca se escribe en ella. La escritura llegará en
-la Fase 4.
+El espejo se construye a partir del volcado de estado que envía la mesa y se
+refresca con el sondeo periódico del enlace. Además, una escritura local aplica
+su valor de inmediato (:meth:`StateMirror.apply_level`) para que la interfaz no
+tenga que esperar al siguiente volcado.
 
 Todas las mutaciones y lecturas pasan por un ``asyncio.Lock`` para que el
 bucle de enlace (que actualiza) y la API/WebSocket (que leen) no observen un
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from .protocol import dump as dump_module
+from .protocol import fader_law
 from .protocol.framing import MixerVersion
 
 #: Índices 0-2: los tres primeros bloques del volcado. En la Qu-16 capturada
@@ -153,6 +155,28 @@ class StateMirror:
             self.firmware = None
             self.channels = []
             self.updated_at = None
+
+    async def apply_level(self, index: int, value: int) -> bool:
+        """Aplica localmente el nivel de un canal tras una escritura.
+
+        Evita que la interfaz espere al siguiente volcado. Solo modifica
+        canales que ya existen en el último volcado; devuelve ``False`` si el
+        índice no está presente. El sondeo posterior confirmará o corregirá el
+        valor, así que no hay confirmación por eco.
+        """
+        level = _level(fader_law.to_db(value))
+        async with self._lock:
+            if not 0 <= index < len(self.channels):
+                return False
+            channel = self.channels[index]
+            self.channels[index] = ChannelView(
+                index=channel.index,
+                name=channel.name,
+                level_db=level,
+                kind=channel.kind,
+            )
+            self.updated_at = datetime.now(UTC)
+            return True
 
     # ----------------------------------------------------------------- lectura
 

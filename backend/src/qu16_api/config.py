@@ -39,11 +39,19 @@ class Settings(BaseSettings):
     #: Si es ``False`` (por defecto) la API no abre ningún socket: los tests y
     #: el CI no dependen de que haya una mesa en la red.
     auto_connect: bool = False
+    #: Candado real de escritura: sin esto la API no manda ningún comando DSP.
+    #: La capa de protocolo tiene su propio permiso (``WRITE_ENABLED``), pero el
+    #: valor operativo y por defecto es este, apagado.
+    write_enabled: bool = False
     #: Rango del retroceso exponencial entre reintentos de conexión.
     reconnect_min: float = Field(default=1.0, gt=0)
     reconnect_max: float = Field(default=30.0, gt=0)
     #: Periodo del latido de control mientras la sesión está viva.
     keepalive_interval: float = Field(default=0.5, gt=0)
+    #: Segundos entre volcados de refresco del espejo. La mesa puede dejar de
+    #: empujar avisos DSP, así que el sondeo mantiene la interfaz al día. ``0``
+    #: desactiva el sondeo.
+    poll_interval: float = Field(default=2.0, ge=0)
     #: Los medidores llegan por UDP al puerto anunciado en el handshake. Si se
     #: desactivan no se abre el socket y el enlace sigue funcionando.
     meters_enabled: bool = True
