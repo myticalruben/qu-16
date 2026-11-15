@@ -1,12 +1,13 @@
 #!/bin/bash
-# Copia esta instancia a la laptop y la (re)arranca.
+# Copia el proyecto a la laptop y (re)arranca la instancia.
 # Uso: deploy/instance.sh [usuario@host]
 set -eu
 DEST="${1:-deepseek@ruben-alexander-laptop-ubuntu}"
 DIR=/opt/qu16-app
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> empaquetando"
-tar czf /tmp/qu16-app.tgz --exclude=.git --exclude=node_modules \
+tar czf /tmp/qu16-app.tgz -C "$HERE/.." --exclude=.git --exclude=node_modules \
   --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache .
 
 echo "==> copiando a $DEST"
@@ -16,9 +17,9 @@ echo "==> desplegando en $DIR"
 ssh "$DEST" "set -e
   mkdir -p $DIR
   tar xzf /tmp/qu16-app.tgz -C $DIR
+  cp $DIR/deploy/laptop/*.sh $DIR/ && chmod +x $DIR/*.sh
   [ -d $DIR/.venv ] || python3 -m venv $DIR/.venv
   $DIR/.venv/bin/pip -q install -e $DIR/backend
-  [ -x $DIR/start.sh ] || { echo 'faltan start.sh/stop.sh/status.sh'; exit 1; }
   $DIR/stop.sh || true
   $DIR/start.sh
   sleep 2
